@@ -1,6 +1,6 @@
 # PawnGame
 
-A small browser game in pixel-art Gaussian splats. The player is an ivory chess pawn with a sword on a chessboard that never ends. Dark pawns drop in from every side and hop toward it. A sword hit cuts them in two along the blade's path.
+A small browser game in pixel-art Gaussian splats. The player is an ivory chess pawn with a sword and shield on a chessboard that never ends. Dark pawns drop in from every side and hop toward it. A sword hit cuts them in two along the blade's path.
 
 Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `main`; the path is case-sensitive).
 
@@ -24,11 +24,15 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 | --- | --- | --- |
 | Hop forward one square (hold to keep hopping) | W or ↑ | ↑ |
 | Swing left / right | A / D, ← / →, or Q / E | ◀ Swing / Swing ▶ |
+| Dash two squares forward | Space or Shift | Dash ⇈ |
+| Block left / right | Z / C | ◀ Block / Block ▶ |
 | Orbit the camera | Drag | Drag |
 | Reset the camera | Double-click | |
 | Zoom | Scroll | |
 
 A swing sweeps the blade from about 100° on one side of the pawn's facing to 100° on the other, covering both front diagonals. The pawn ends it facing a quarter turn toward the swing, and hops then go in that direction. A swing pressed during a hop runs after the landing. An enemy on the square ahead blocks a hop.
+
+A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A block raises the shield to guard the front-left or front-right diagonal for 0.6 s, then lowers it; the pawn keeps its facing. Blocking has no gameplay effect yet, and the new keys are placeholders.
 
 ## Engine: ink-studio
 
@@ -61,7 +65,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 ### Bake (on page load)
 
 - **Board squares.** One light and one dark square are baked in their own small worlds. Splats below the top face are dropped, since the board is never seen from below.
-- **Main world.** The main world is baked in separate passes: blob shadows, the player's pawn, the ivory sword, then one pass per enemy. Each enemy is baked at its own spot (`EREST`) away from the player and the other enemies. That stops their solids merging and keeps a neighbour's geometry out of their baked lighting. The rig moves every enemy from its bake spot to the board.
+- **Main world.** The main world is baked in separate passes: blob shadows, the player's pawn, the ivory sword, the shield, then one pass per enemy. Each enemy is baked at its own spot (`EREST`) away from the player and the other enemies. That stops their solids merging and keeps a neighbour's geometry out of their baked lighting. The rig moves every enemy from its bake spot to the board.
 - **Palette.** The `hop.js` palette (background, five ivory steps, three steps each for the dark and light squares) plus five ebony steps for enemies.
 - **Timing.** The whole bake takes about 0.2 s and produces about 23,600 splats in the main world.
 
@@ -76,12 +80,15 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 
 - **Hop.** `hopPose(u)` is the hop curve from `scenes/hop.js`: crouch, arc, landing squash, settle. The lean axis is `up × direction`, so it works in any direction. A held key starts the next hop at 90% of the current one.
 - **Swing.** `swingPose(u, side)` runs wind-up, slash and recovery over 0.7 s. During the slash the arm extends, the blade swings flat round the front, and the body follows a quarter turn.
+- **Dash.** `dashPose(u)` runs a short coil, a low skim over two squares with a hard forward lean, and a braking skid that rocks back. It reuses the hop's lean and squash matrix.
+- **Block.** `blockPose(u, side)` brings the shield up and out to a front diagonal, holds it, and lowers it. The body twists slightly toward the guard and the sword drops back out of the way.
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
+- **Shield.** A round ivory shield (a thin ellipsoid with a boss) is a child part of the pawn, held on its left side at rest. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. It tucks behind the pawn during a swing so the blade clears it.
 - **Camera.** The camera sits behind the pawn's facing with a 3/4 offset and eases round as it turns.
 
 ### Lighting
 
-`K.light.capture(B, S)` records each splat's ramp and normal during the bake. `K.light.system` with a live `sun` re-shades the player's pawn and sword every frame from their turned normals, stepping along their own palette ramps. The baked shading serves as the rest pose (`keep: Infinity`), so baked shadows and ambient occlusion are kept. Enemies use baked lighting.
+`K.light.capture(B, S)` records each splat's ramp and normal during the bake. `K.light.system` with a live `sun` re-shades the player's pawn, sword and shield every frame from their turned normals, stepping along their own palette ramps. The baked shading serves as the rest pose (`keep: Infinity`), so baked shadows and ambient occlusion are kept. Enemies use baked lighting.
 
 ### Enemies
 
@@ -121,6 +128,7 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | `?enemies=3` | Sets the enemy pool size. |
 | `?w=16` | Sets the board patch size (keep it even). |
 | `?slow=8` | Plays everything 8× slower. |
+| `?hop=1&dash=0.45&swing=0.7&block=0.6` | Sets the length of each move in seconds, for feel testing. |
 
 ### Testing hooks
 
