@@ -26,13 +26,16 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 | Swing left / right | A / D, ← / →, or Q / E | ◀ Swing / Swing ▶ |
 | Dash two squares forward | Space or Shift | Dash ⇈ |
 | Block left / right | Z / C | ◀ Block / Block ▶ |
+| Restart after being cut down | R | Restart |
 | Orbit the camera | Drag | Drag |
 | Reset the camera | Double-click | |
 | Zoom | Scroll | |
 
 A swing sweeps the blade from about 100° on one side of the pawn's facing to 100° on the other, covering both front diagonals. The pawn ends it facing a quarter turn toward the swing, and hops then go in that direction. A swing pressed during a hop runs after the landing. An enemy on the square ahead blocks a hop.
 
-A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A block raises the shield to guard the front-left or front-right diagonal for 0.6 s, then lowers it; the pawn keeps its facing. Blocking has no gameplay effect yet, and the new keys are placeholders.
+A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A block raises the shield to guard the front-left or front-right diagonal for 0.6 s, then lowers it; the pawn keeps its facing. The new keys are placeholders.
+
+Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield is blocked, whether the shield is raised or resting at the pawn's side. A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
 
 ## Engine: ink-studio
 
@@ -65,7 +68,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 ### Bake (on page load)
 
 - **Board squares.** One light and one dark square are baked in their own small worlds. Splats below the top face are dropped, since the board is never seen from below.
-- **Main world.** The main world is baked in separate passes: blob shadows, the player's pawn, the ivory sword, the shield, then one pass per enemy. Each enemy is baked at its own spot (`EREST`) away from the player and the other enemies. That stops their solids merging and keeps a neighbour's geometry out of their baked lighting. The rig moves every enemy from its bake spot to the board.
+- **Main world.** The main world is baked in separate passes: blob shadows, the player's pawn, the ivory sword, the shield, then two passes per enemy (body, then sword). Each enemy is baked at its own spot (`EREST`) away from the player and the other enemies. That stops their solids merging and keeps a neighbour's geometry out of their baked lighting. The rig moves every enemy from its bake spot to the board.
 - **Palette.** The `hop.js` palette (background, five ivory steps, three steps each for the dark and light squares) plus five ebony steps for enemies.
 - **Timing.** The whole bake takes about 0.2 s and produces about 23,600 splats in the main world.
 
@@ -84,7 +87,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Block.** `blockPose(u, side)` brings the shield up and out to a front diagonal, holds it, and lowers it. The body twists slightly toward the guard and the sword drops back out of the way.
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
 - **Shield.** A round ivory shield (a thin ellipsoid with a boss) is a child part of the pawn, held on its left side at rest. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. It tucks behind the pawn during a swing so the blade clears it.
-- **Camera.** The camera sits behind the pawn's facing with a 3/4 offset and eases round as it turns.
+- **Camera.** The camera is isometric: an orthographic projection about 35° down (pitch 0.615), straight behind the pawn's facing, easing round as it turns. `?cam=persp` brings back the earlier perspective camera with its 3/4 offset.
 
 ### Lighting
 
@@ -97,11 +100,17 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Movement.** It hops forward at random intervals of 0.4–2.8 s and waits when the next square is taken.
 - **Despawning.** It disappears in the fog once it is more than 11 squares from the player.
 
+### Enemy attacks
+
+- **AI.** Enemies hop forward along one line and never turn. When idle on a square, an enemy checks the player's square (and where a hop or dash is taking it) against its front three squares. If the player is there, it swings with `enemySwingPose`: the player's swing with a longer wind-up that trembles, and a recovery that turns the body back to its line.
+- **Sword.** Each enemy carries an ebony copy of the sword (rig part `e<n>sword`, a child of the body).
+
 ### Hits and the cut
 
-- **Detection.** During the slash, points along the blade are tested against each enemy every frame, with sub-steps so a fast blade cannot skip one.
+- **Shapes decide contact; squares decide intent.** Contact uses the signed distance functions the pieces are sculpted from: `pawnSDF` (the pawn's lathe, collar and head) and `shieldSDF` (the shield ellipsoid). A blade point is moved into a piece's own frame by inverting its rig matrix, and counts as touching within `BLADE_R`. Whether a move may start, enemy awareness and spawning stay square-based. Bodies don't push each other.
+- **Detection.** During a slash, points along the blade are tested every frame, with four sub-steps between frames so a fast blade cannot skip a piece. Enemy blades test the player's shield first, then the pawn. A blocked enemy blade springs back and does no damage.
 - **The cut plane.** On a hit, the cut plane contains the blade's direction and its sweep direction. The enemy's splats above the plane move to a second rig part (`e<n>cut`) with `rig.assign`.
-- **Death animation.** The cut part slides off along the blade's path and topples onto the board while the base wobbles. Both shrink away after about a second. The two parts are then joined again for reuse.
+- **Death animation.** The cut part slides off along the blade's path and topples onto the board while the base wobbles. Both shrink away after about a second. The two parts are then joined again for reuse. The player's pieces use the same cut (rig part `pawncut`) but stay where they fell until a restart.
 - **Counter.** The **Taken** counter in the HUD counts hits.
 
 ## Running locally
@@ -129,11 +138,15 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | `?w=16` | Sets the board patch size (keep it even). |
 | `?slow=8` | Plays everything 8× slower. |
 | `?hop=1&dash=0.45&swing=0.7&block=0.6` | Sets the length of each move in seconds, for feel testing. |
+| `?windup=0.5` | Sets the enemy wind-up in seconds. |
+| `?eside=-1` | Makes enemies swing from their left instead of their right. |
+| `?cam=persp` | Uses the earlier perspective camera instead of the isometric one. |
+| `?hp=3&invuln=1` | Sets the player's hit points and the invulnerable time after a hit. |
 
 ### Testing hooks
 
 - **Clock.** Setting `window.__clock` (seconds) replaces the real clock, so a test can step frames to exact times.
-- **State.** `window.__endless` exposes game state, and `window.__enemies` the enemy pool.
+- **State.** `window.__endless` exposes game state (including `hp` and `dead`), and `window.__enemies` the enemy pool.
 - **Frame counter.** `window.__frames` counts frames.
 - **Software rendering.** Headless Chromium with SwiftShader renders at about 1–2 fps, so tests step the clock instead of relying on real time.
 
@@ -156,6 +169,6 @@ To convert a clip to GIF or MP4 with ffmpeg, read it with `-f apng -i hop.png` a
 
 - **Jagged cut.** The cut edge follows the existing splats; no new splats fill the cut surface.
 - **No shadows from the sword.** The sword casts no shadow and receives none from the pawn.
-- **Enemies don't fight back.** Enemies do not attack the player.
+- **Placeholder rules.** Many attack and health rules are stand-ins in named constants at the top of `web/game.js` (marked `PLACEHOLDER`).
 - **Collar join.** The pawn's neck-to-collar join is slightly lumpy because the shapes are not smooth-blended.
 - **Frame rate.** Real-device frame rate has not been measured. The renderer sorts all visible splats each frame (the main world plus about 85,000 board splats).

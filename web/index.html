@@ -51,7 +51,20 @@
     font: 500 11px var(--font-mono); color: var(--ink);
     border: 1px solid var(--slate-hi); border-bottom-width: 2px; padding: 0 4px; border-radius: 3px;
   }
-  #status[hidden] { display: none; }
+  #status[hidden], .flash[hidden], .banner[hidden] { display: none; }
+  .flash {
+    position: fixed; left: 0; right: 0; top: 38%; text-align: center; pointer-events: none;
+    font: 400 20px var(--font-display); letter-spacing: 0.1em; color: var(--ink); text-shadow: 0 2px 0 var(--bg);
+  }
+  .banner {
+    position: fixed; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; gap: 14px;
+    padding: 0 16px max(18vh, 140px); background: color-mix(in srgb, var(--bg) 45%, transparent); pointer-events: none;
+  }
+  .banner-title { font: 400 28px var(--font-display); letter-spacing: 0.1em; }
+  .banner button {
+    pointer-events: auto; min-height: 44px; padding: 0 18px; border-radius: 8px; border: 1px solid var(--slate-hi);
+    background: var(--slate); color: var(--ink); font: 400 14px var(--font-display); letter-spacing: 0.06em; cursor: pointer;
+  }
   #status {
     position: fixed; inset: 0; display: grid; place-items: center; padding: 0 16px;
     font: 400 14px var(--font-display); letter-spacing: 0.08em; color: var(--ink); text-align: center;
@@ -88,6 +101,7 @@
     <div><kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd>: swing left / right</div>
     <div><kbd>Space</kbd> or <kbd>Shift</kbd>: dash two squares</div>
     <div><kbd>Z</kbd> <kbd>C</kbd>: block left / right</div>
+    <div><kbd>R</kbd>: restart after you're cut down</div>
     <div>Drag: orbit · double-click: reset · scroll: zoom</div>
   </div>
 </div>
@@ -96,6 +110,14 @@
   <span id="coords">0, 0</span>
   <span class="label">Taken</span>
   <span id="taken" class="stat">0</span>
+  <span class="label">Health</span>
+  <span id="hp" class="stat" aria-live="polite">■■■</span>
+</div>
+
+<div id="flash" class="flash" hidden></div>
+<div id="banner" class="banner" hidden>
+  <div class="banner-title">Cut down</div>
+  <button type="button" id="restart">Restart <kbd>R</kbd></button>
 </div>
 
 <div id="status">Baking splats…</div>

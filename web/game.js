@@ -24,6 +24,17 @@ const BLOCK_TURNS = false;         // PLACEHOLDER: blocking does not change the 
 const SHIELD_REST = { sweep: 1.45, y: 0.5, r: 0.34 };   // off hand at rest: on the pawn's left side
 const SHIELD_GUARD = { y: 0.78, r: 0.5 };                // raised to guard a front diagonal
 const SHIELD_BAKE = [-24, 0.6, 40];                      // baked away from the pawn so it picks up no baked shadow
+const SHIELD_R = [0.2, 0.24, 0.032];                     // shield ellipsoid radii (faces -z when baked)
+// Enemy attacks and health. PLACEHOLDER values wait on design.
+const PLAYER_HP = num('hp', 3);          // PLACEHOLDER: hit points
+const ENEMY_WINDUP = num('windup', 0.5); // PLACEHOLDER: an enemy's wind-up, the tell (the player's is 0.175 s)
+const ENEMY_SWING_SIDE = num('eside', 1); // PLACEHOLDER: enemies always swing left (+1), from their right; ?eside=-1 flips it
+const ENEMY_SWING_REST = 0.8;            // PLACEHOLDER: an enemy waits this long after a swing before it may swing again
+const ENEMIES_TURN = false;              // PLACEHOLDER: enemies never turn; they travel and swing along one line
+const ENEMY_FRIENDLY_FIRE = false;       // PLACEHOLDER: enemy blades pass through other enemies
+const TRADE_HITS = 'both';               // PLACEHOLDER: when both blades land in the same swing, both hits count
+const INVULN = num('invuln', 1.0);       // PLACEHOLDER: seconds of invulnerability after the player is hit
+const BLADE_R = 0.05;                    // blade half-thickness for contact tests
 const CHAIN_AT = 0.9;    // a held key starts the next hop once the landing has mostly settled
 const ART_HEIGHT = 168;  // art pixels down the screen
 const HAND = [0.1, 0.55, -0.32];   // sword grip at rest: in front of the pawn (pawn faces -z), blade straight up
@@ -33,6 +44,11 @@ const SPAWN_DIST = 6;            // enemies drop in this many squares away
 const DESPAWN_DIST = 11;         // and vanish (inside the fog) past this
 const SLOW = Number(params.get('slow')) || 1;          // ?slow=8 plays everything 8x slower, for inspection
 const LIVE_LIGHT = params.get('light') !== 'baked';
+// Camera: isometric by default (orthographic, ~35° down, straight behind the pawn's facing). ?cam=persp restores the
+// earlier perspective view (3/4 offset, lower pitch).
+const PERSP = params.get('cam') === 'persp';
+const CAM = PERSP ? { projection: 'perspective', pitch: 0.38, dist: 7.5, yaw: 0.5 }
+  : { projection: 'orthographic', pitch: 0.615, dist: 8.5, yaw: 0 };
 
 const canvas = document.getElementById('view');
 const status = document.getElementById('status');
@@ -89,6 +105,32 @@ function sculptPawn(S, ramp, tag, fine, [x, y, z] = [0, 0, 0]) {
   S.ball([x, y + 2.55 * PK, z], 0.55 * PK, ramp, { res: r[1], tag });
 }
 
+// A sword with its grip at [hx, hy, hz], blade straight up
+function sculptSword(S, [hx, hy, hz], c, tag, res) {
+  const mid = (BLADE[0] + BLADE[1] - 0.1) / 2, half = (BLADE[1] - 0.1 - BLADE[0]) / 2;
+  S.box([hx, hy + mid, hz], [0.046, half, 0.016], c.blade, { res, tag });                         // blade
+  S.box([hx, hy + BLADE[1] - 0.05, hz], [0.028, 0.05, 0.016], c.blade, { res: res * 0.9, tag });  // tip
+  S.box([hx, hy + 0.12, hz], [0.15, 0.024, 0.032], c.guard, { res, tag });                        // crossguard
+  S.box([hx, hy, hz], [0.024, 0.1, 0.024], c.grip, { res, tag });                                 // grip
+  S.ball([hx, hy - 0.12, hz], 0.042, c.pommel, { res, tag });                                     // pommel
+}
+
+// Signed distance to the pawn's shape, in its own frame (base centre at the origin): the same lathe and
+// ball the bake sculpts. Used for contact tests, so blades meet the real silhouette rather than a cylinder.
+function pawnSDF([x, y, z]) {
+  const r = Math.hypot(x, z), H = 1.9 * PK;
+  const t = Math.min(1, Math.max(0, y / H));
+  let d = Math.max(r - pawnProfile(t), -y, y - H);
+  const cy = 1.85 * PK, ch = 0.16 * PK;
+  d = Math.min(d, Math.max(r - 0.52 * PK, Math.abs(y - cy - ch / 2) - ch / 2));
+  return Math.min(d, Math.hypot(x, y - 2.55 * PK, z) - 0.55 * PK);
+}
+// Approximate signed distance to the shield ellipsoid, in its own frame (centre at the origin)
+function shieldSDF(p) {
+  const k = Math.hypot(p[0] / SHIELD_R[0], p[1] / SHIELD_R[1], p[2] / SHIELD_R[2]);
+  return (k - 1) * Math.min(...SHIELD_R);
+}
+
 function bakeWorld() {
   const B = makeBuilder(11, PALETTE);
   const S = K.sculpt(makeSculpt(B));
@@ -105,13 +147,7 @@ function bakeWorld() {
   S.bake();
 
   // Ivory sword, baked upright in front of the pawn; the rig tilts and swings it
-  const [hx, hy, hz] = HAND;
-  const mid = (BLADE[0] + BLADE[1] - 0.1) / 2, half = (BLADE[1] - 0.1 - BLADE[0]) / 2;
-  S.box([hx, hy + mid, hz], [0.046, half, 0.016], ivory, { res: 0.018, tag: 'sword' });               // blade
-  S.box([hx, hy + BLADE[1] - 0.05, hz], [0.028, 0.05, 0.016], ivory, { res: 0.016, tag: 'sword' });   // tip
-  S.box([hx, hy + 0.12, hz], [0.15, 0.024, 0.032], { r: [1, 2, 3] }, { res: 0.018, tag: 'sword' });   // crossguard
-  S.box([hx, hy, hz], [0.024, 0.1, 0.024], { r: [1, 1, 2] }, { res: 0.018, tag: 'sword' });           // grip
-  S.ball([hx, hy - 0.12, hz], 0.042, { r: [2, 3, 4] }, { res: 0.018, tag: 'sword' });                 // pommel
+  sculptSword(S, HAND, { blade: ivory, guard: { r: [1, 2, 3] }, grip: { r: [1, 1, 2] }, pommel: { r: [2, 3, 4] } }, 'sword', 0.018);
   S.bake();
 
   // Round shield for the off hand: a thin ellipsoid facing -z with a boss, baked on its own; the rig carries it
@@ -120,11 +156,16 @@ function bakeWorld() {
   S.bake();
 
   // Enemy pool: identical dark pawns, all baked at the origin and placed by the rig
-  for (let i = 0; i < ENEMIES; i++) { sculptPawn(S, ebony, `e${i}`, false, EREST(i)); S.bake(); }
-  for (let i = 0; i < ENEMIES; i++) rig.part(`e${i}cut`);   // the half a sword hit slices off, filled in on a hit
+  for (let i = 0; i < ENEMIES; i++) {
+    sculptPawn(S, ebony, `e${i}`, false, EREST(i)); S.bake();
+    sculptSword(S, add(EREST(i), HAND), { blade: { r: [13, 14, 15] }, guard: { r: [12, 13, 14] }, grip: { r: [12, 12, 13] }, pommel: { r: [13, 14, 15] } }, `e${i}sword`, 0.022);
+    S.bake();
+  }
+  for (let i = 0; i < ENEMIES; i++) rig.part(`e${i}cut`);
+  rig.part('pawncut');   // the player's top half, when the last hit point goes   // the half a sword hit slices off, filled in on a hit
 
   const world = B.finish({
-    cam: { target: [0, 0.6, 0], dist: 7.5, pitch: 0.38, yaw: 0.5 },
+    cam: { target: [0, 0.6, 0], dist: CAM.dist, pitch: CAM.pitch, yaw: CAM.yaw, projection: CAM.projection },
     detail: 14, dither: 0.2, radius: 11
   });
   // Fade distant squares into the background so the board's edge is never seen.
@@ -226,6 +267,22 @@ function blockPose(u, side) {
   };
 }
 
+// An enemy's swing: the player's swing with a longer wind-up (the tell), and the body turns back to its line
+// at the end instead of keeping the quarter turn. Returns null once the swing is over.
+const ENEMY_SWING = ENEMY_WINDUP + 0.75 * SWING;
+function enemySwingPose(t, side) {
+  if (t >= ENEMY_SWING) return null;
+  const u = t < ENEMY_WINDUP ? 0.25 * t / ENEMY_WINDUP : 0.25 + 0.75 * (t - ENEMY_WINDUP) / (0.75 * SWING);
+  const s = swingPose(u, side);
+  if (!ENEMIES_TURN && u >= 0.55) {                   // recover: unwind the turn so it faces its line again
+    const r = 1 - ease((u - 0.55) / 0.45);
+    s.turn = side * (Math.PI / 2) * r;
+  }
+  if (t < ENEMY_WINDUP) s.lean += 0.05 * Math.sin(t * 40) * (t / ENEMY_WINDUP);   // the blade trembles as it draws back
+  return s;
+}
+const phiOf = dir => Math.atan2(-dir[0], -dir[1]);   // facing angle for a square direction
+
 // ---------- game state ----------
 
 const state = {
@@ -233,16 +290,19 @@ const state = {
   origin: [0, 0],    // render origin square; kept near the pawn so coordinates stay small
   phi: 0,            // facing: the pawn looks along facingVec(phi); quarter turns only
   act: null,         // { kind: 'hop' | 'dash', dir, t0 } or { kind: 'swing' | 'block', side, t0 }
-  orbit: 0, pitch: 0.38, dist: 7.5, yaw: 0.5,
+  orbit: 0, pitch: CAM.pitch, dist: CAM.dist, yaw: CAM.yaw,
   target: [0, 0.6, 0],
   taken: 0,
-  nextSpawn: 1.5
+  nextSpawn: 1.5,
+  hp: PLAYER_HP,
+  hurtAt: -Infinity,  // when the player was last hit
+  dead: null          // the cut, once the last hit point is gone
 };
 window.__endless = state; // for tests
 const held = new Set();   // sources holding "forward"
 let queued = null;         // { kind, side } waiting for the current action to finish
 
-// Enemies: { i, mode: 'off' | 'drop' | 'idle' | 'hop' | 'dying', sq, dir, t0, wait, cut }
+// Enemies: { i, mode: 'off' | 'drop' | 'idle' | 'hop' | 'swing' | 'dying', sq, dir, t0, wait, cut, struck, blocked }
 const enemies = Array.from({ length: ENEMIES }, (_, i) => ({ i, mode: 'off', sq: [0, 0], dir: [0, -1], t0: 0, wait: 0, dirty: true }));
 window.__enemies = enemies; // for tests
 const sqKey = (x, z) => x + ',' + z;
@@ -275,6 +335,17 @@ function spawn(now) {
   }
 }
 
+// Is the player on the square ahead of this enemy or either front diagonal? (Counts where the player is
+// moving to, as well as where it stands.)
+function playerInFront(e) {
+  const [dx, dz] = e.dir, ahead = [e.sq[0] + dx, e.sq[1] + dz];
+  const front = [ahead, [ahead[0] + dz, ahead[1] - dx], [ahead[0] - dz, ahead[1] + dx]].map(q => sqKey(...q));
+  const mine = [sqKey(...state.sq)];
+  const a = state.act;
+  if (a?.dir) for (let k = 1; k <= (a.kind === 'dash' ? DASH_SQUARES : 1); k++) mine.push(sqKey(state.sq[0] + k * a.dir[0], state.sq[1] + k * a.dir[1]));
+  return mine.some(m => front.includes(m));
+}
+
 function stepEnemies(now) {
   if (now >= state.nextSpawn) {
     if (enemies.filter(e => e.mode !== 'off').length < ENEMIES - 1) spawn(now);
@@ -288,6 +359,12 @@ function stepEnemies(now) {
       e.sq = [e.sq[0] + e.dir[0], e.sq[1] + e.dir[1]];
       e.mode = 'idle'; e.t0 = now; e.wait = rand(0.4, 2.8);
     }
+    if (e.mode === 'swing' && now - e.t0 >= ENEMY_SWING) { e.mode = 'idle'; e.t0 = now; e.wait = rand(0.4, 2.8); e.rested = now + ENEMY_SWING_REST; }
+    // On a square, it swings once the player stands on one of its front three squares; once committed it plays out
+    if ((e.mode === 'idle') && !state.dead && now >= (e.rested ?? 0) && playerInFront(e)) {
+      Object.assign(e, { mode: 'swing', t0: now, side: ENEMY_SWING_SIDE, struck: false, blocked: false });
+      continue;
+    }
     if (e.mode === 'idle' && now - e.t0 >= e.wait) {
       const next = sqKey(e.sq[0] + e.dir[0], e.sq[1] + e.dir[1]);
       if (!occupied().has(next)) { e.mode = 'hop'; e.t0 = now; }
@@ -298,6 +375,13 @@ function stepEnemies(now) {
 }
 
 function step(now) {
+  if (state.restartPending) {
+    state.restartPending = false;
+    state.restore = true; state.dead = null; state.hp = PLAYER_HP; state.hurtAt = -Infinity;
+    state.taken = 0; taken.textContent = 0; state.nextSpawn = now + 1.5;
+    for (const e of enemies) if (e.mode !== 'off') { e.mode = 'off'; e.dirty = true; if (e.cut) e.restore = true; }
+    showHp(); banner.hidden = true;
+  }
   const a = state.act;
   if (a) {
     const u = (now - a.t0) / DURATION[a.kind];
@@ -309,14 +393,15 @@ function step(now) {
       state.act = null;
     }
   }
-  if (!state.act) {
+  if (state.dead) { state.act = null; queued = null; }
+  if (!state.act && !state.dead) {
     const next = queued ?? (held.size ? { kind: 'hop' } : null);
     queued = null;
     if (next?.kind === 'hop' || next?.kind === 'dash') {
       const [fx, fz] = facingVec(state.phi), dir = [Math.round(fx), Math.round(fz)];
       // An enemy standing on a square the move passes through blocks it
       const n = next.kind === 'dash' ? DASH_SQUARES : 1;
-      const stands = k => enemies.some(e => (e.mode === 'idle' || e.mode === 'drop') && e.sq[0] === state.sq[0] + k * dir[0] && e.sq[1] === state.sq[1] + k * dir[1]);
+      const stands = k => enemies.some(e => (e.mode === 'idle' || e.mode === 'drop' || e.mode === 'swing') && e.sq[0] === state.sq[0] + k * dir[0] && e.sq[1] === state.sq[1] + k * dir[1]);
       let blocked = false;
       for (let k = 1; k <= n; k++) blocked ||= stands(k);
       if (!blocked) state.act = { kind: next.kind, dir, t0: now };
@@ -331,7 +416,7 @@ function step(now) {
       const shift = off - (off & 1);
       state.origin[i] += shift;
       state.target[i ? 2 : 0] -= shift * SQ;
-      for (const e of enemies) if (e.cut) { e.cut.g[i ? 2 : 0] -= shift * SQ; e.cut.pos[i ? 2 : 0] -= shift * SQ; }
+      for (const c of [...enemies.map(e => e.cut), state.dead]) if (c) { c.g[i ? 2 : 0] -= shift * SQ; c.pos[i ? 2 : 0] -= shift * SQ; }
     }
   }
 }
@@ -369,103 +454,175 @@ function pose(now) {
     A = K.M.mul(scaleY(b.sy), rotY(phi));
     sh = b.shield; sweep = b.sword.sweep; lean = b.sword.lean;
   }
+  const hurt = now - state.hurtAt;   // flinch when hit: a sharp squash that rings out
+  if (hurt >= 0 && hurt < 0.45) A = K.M.mul(scaleY(1 - 0.16 * Math.exp(-7 * hurt) * Math.cos(hurt * 28)), A);
   // Sword: carried round the pawn's axis by `sweep`, tilted outward by `lean`, held further out by `reach`
   const grip = mv(rotY(sweep), [HAND[0], HAND[1], HAND[2] - reach]);
   const swordA = K.M.mul(rotY(sweep), K.M.rot([1, 0, 0], -lean));
   // Shield: carried round the pawn's axis, its face pointing outward along `sweep`
   const shieldAt = mv(rotY(sh.sweep), [0, sh.y, -sh.r]);
   const shieldA = K.M.mul(rotY(sh.sweep), K.M.rot([1, 0, 0], sh.tilt));
-  return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, u, side };
+  return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, u, side, now };
 }
 
-// World-space point t along the blade, for a pose
+// World-space point t along the blade, for a pose (the player's or an enemy's)
 function bladePoint(p, t) {
   return add([p.x, p.y, p.z], mv(p.A, add(p.grip, mv(p.swordA, [0, t, 0]))));
 }
 
-// Enemy pose: position and matrix
+// Enemy pose: position, matrix (about its bake spot) and its sword
 function enemyPose(e, now) {
-  let [x, z] = toRender(e.sq), y = 0, A = I3;
+  let [x, z] = toRender(e.sq), y = 0;
+  const phi0 = phiOf(e.dir);
+  let A = rotY(phi0), sweep = 0, lean = 0, reach = 0, slashing = false;
   const u = now - e.t0;
   if (e.mode === 'drop') {           // falls in from above, lands with the hop's squash
     if (u < 0.4) { const f = u / 0.4; y = 4 * (1 - f * f); }
-    else { const h = hopPose(0.7 + 0.3 * Math.min(1, (u - 0.4) / 0.35)); A = scaleY(h.sy); }
+    else { const h = hopPose(0.7 + 0.3 * Math.min(1, (u - 0.4) / 0.35)); A = K.M.mul(scaleY(h.sy), A); }
   } else if (e.mode === 'hop') {
     const h = hopPose(Math.min(1, u / HOP));
     x += e.dir[0] * SQ * h.along; z += e.dir[1] * SQ * h.along; y = h.y;
-    A = hopMatrix(h, e.dir);
-  }
-  return { x, y, z, A };
-}
-
-// ---------- hits ----------
-
-function checkHits(prev, cur, stage, rig) {
-  if (!cur.slashing && !prev?.slashing) return;
-  const steps = 4, hitR = 0.34;
-  for (const e of enemies) {
-    if (e.mode !== 'idle' && e.mode !== 'hop' && e.mode !== 'drop') continue;
-    const ep = enemyPose(e, cur.now);
-    for (let s = 1; s <= steps && e.mode !== 'dying'; s++) {
-      const p = s === steps || !prev ? cur : lerpPose(prev, cur, s / steps);
-      for (let t = 0.35; t <= BLADE[1]; t += 0.12) {
-        const b = bladePoint(p, t);
-        if (Math.hypot(b[0] - ep.x, b[2] - ep.z) < hitR && b[1] > ep.y + 0.05 && b[1] < ep.y + 1.5) {
-          slice(e, ep, p, t, stage, rig, cur.now);
-          break;
-        }
+    A = K.M.mul(hopMatrix(h, e.dir), A);
+  } else if (e.mode === 'swing') {
+    const s = enemySwingPose(u, e.side);
+    if (s) {
+      A = K.M.mul(scaleY(s.sy), rotY(phi0 + s.turn));
+      ({ sweep, lean, reach } = s);
+      slashing = s.slashing && !e.blocked;
+      if (e.blocked) {               // knocked back off the shield: the blade springs up and away
+        const k = Math.min(1, (now - e.blockedAt) / 0.25);
+        lean *= 1 - 0.6 * Math.sin(Math.PI * k);
       }
     }
   }
-}
-// Between two frames, re-evaluate the swing at an intermediate time so fast blades can't skip an enemy
-function lerpPose(prev, cur, f) {
-  return pose(prev.now + (cur.now - prev.now) * f);
+  const grip = mv(rotY(sweep), [HAND[0], HAND[1], HAND[2] - reach]);
+  const swordA = K.M.mul(rotY(sweep), K.M.rot([1, 0, 0], -lean));
+  return { x, y, z, A, grip, swordA, slashing, phi: phi0, now };
 }
 
-// Cut an enemy in two along the blade's path: the plane holds the blade and the direction it is sweeping.
-function slice(e, ep, p, t, stage, rig, now) {
-  const g = bladePoint(p, t);
+// ---------- contact ----------
+
+function inv3(M) {
+  const [a, b, c, d, e, f, g, h, i] = M;
+  const A = e * i - f * h, B = f * g - d * i, C = d * h - e * g, det = a * A + b * B + c * C;
+  return [A / det, (c * h - b * i) / det, (b * f - c * e) / det,
+    B / det, (a * i - c * g) / det, (c * d - a * f) / det,
+    C / det, (b * g - a * h) / det, (a * e - b * d) / det];
+}
+// A world point in a piece's own frame (base centre at the origin, before its pose)
+const toLocal = (p, q) => mv(inv3(p.A), sub(q, [p.x, p.y, p.z]));
+const touchesPawn = (p, q) => pawnSDF(toLocal(p, q)) < BLADE_R;
+const touchesShield = (p, q) => shieldSDF(mv(inv3(p.shieldA), sub(toLocal(p, q), p.shieldAt))) < BLADE_R;
+const BLADE_TS = []; for (let t = 0.2; t <= BLADE[1] + 1e-6; t += 0.08) BLADE_TS.push(t);
+const STEPS = 4;   // sub-steps between frames, so a fast blade can't skip through a piece
+
+// The player's blade against each enemy's shape
+function checkHits(prev, cur, stage, rig) {
+  if (state.dead || (!cur.slashing && !prev?.slashing)) return;
+  for (const e of enemies) {
+    if (!['idle', 'hop', 'drop', 'swing'].includes(e.mode)) continue;
+    for (let s = 1; s <= STEPS && e.mode !== 'dying'; s++) {
+      const tm = !prev ? cur.now : prev.now + (cur.now - prev.now) * s / STEPS;
+      const p = s === STEPS || !prev ? cur : pose(tm), ep = enemyPose(e, tm);
+      const t = BLADE_TS.find(t => touchesPawn(ep, bladePoint(p, t)));
+      if (t !== undefined) killEnemy(e, ep, p, t, stage, rig, tm);
+    }
+  }
+}
+
+// Each swinging enemy's blade against the player's shield, then the player's shape
+function checkEnemyHits(prevNow, now, stage, rig) {
+  if (state.dead) return;
+  for (const e of enemies) {
+    if (e.mode !== 'swing' || e.struck || e.blocked) continue;
+    for (let s = 1; s <= STEPS; s++) {
+      const tm = prevNow + (now - prevNow) * s / STEPS;
+      const ep = enemyPose(e, tm);
+      if (!ep.slashing) continue;
+      const p = pose(tm), pts = BLADE_TS.map(t => [t, bladePoint(ep, t)]);
+      if (pts.some(([, b]) => touchesShield(p, b))) { e.blocked = true; e.blockedAt = tm; flash('Blocked'); break; }
+      const hit = pts.find(([, b]) => touchesPawn(p, b));
+      if (!hit) continue;
+      e.struck = true;
+      if (tm - state.hurtAt < INVULN) break;
+      state.hurtAt = tm; state.hp--;
+      showHp();
+      if (state.hp <= 0) killPlayer(e, ep, p, hit[0], stage, tm);
+      else flash('Hit');
+      break;
+    }
+  }
+}
+
+// Cut a piece in two along a blade's path: the plane holds the blade and the direction it is sweeping.
+// `blade(t)` is the blade's pose at time t; `rows` are the piece's splats; `rest` its bake spot.
+function cutPiece({ blade, t, now, rows, rest, pos, cutPart, stage, rig, phi }) {
+  const p = blade(now), g = bladePoint(p, t);
   const d = norm(sub(bladePoint(p, BLADE[1]), bladePoint(p, BLADE[0])));
-  const ahead = pose(now + 0.01);
-  const v = norm(sub(bladePoint(ahead, t), g));
+  const v = norm(sub(bladePoint(blade(now + 0.01), t), g));
   let n = norm(cross(d, v));
   if (Math.hypot(...n) < 0.5 || !isFinite(n[0])) n = [0, 1, 0];
   if (n[1] < 0) n = scale(n, -1);
-  // Freeze the enemy where it stands, upright, and sort its splats by side of the plane
-  const pos = [ep.x, 0, ep.z];
-  const part = rig.part(`e${e.i}`), cutPart = `e${e.i}cut`;
-  const base = stage.base, top = [], rest = EREST(e.i);
-  for (const i of e.rows) {
-    const w = [base[i * 16] - rest[0] + pos[0], base[i * 16 + 1], base[i * 16 + 2] - rest[2] + pos[2]];
+  // Freeze the piece where it stands, upright, and sort its splats by side of the plane
+  const base = stage.base, top = [];
+  for (const i of rows) {
+    const w = [base[i * 16] - rest[0] + pos[0], base[i * 16 + 1] - rest[1], base[i * 16 + 2] - rest[2] + pos[2]];
     if (dot(sub(w, g), n) > 0) top.push(i);
   }
-  if (top.length && top.length < e.rows.length) rig.assign(cutPart, top);
-  // Height where the plane crosses the enemy's axis: the top half hinges about that point
+  const split = top.length > 0 && top.length < rows.length;
+  if (split) rig.assign(cutPart, top);
+  // Height where the plane crosses the piece's axis: the top half hinges about that point
   const h = Math.min(1.4, Math.max(0.15, g[1] - (n[0] * (pos[0] - g[0]) + n[2] * (pos[2] - g[2])) / n[1]));
-  const slide = norm([v[0], 0, v[2]]);
+  let slide = norm([v[0], 0, v[2]]);
+  if (!isFinite(slide[0]) || Math.hypot(...slide) < 0.5) slide = [1, 0, 0];
+  return { g, n, h, slide, pos, split, phi, t0: now };
+}
+
+function killEnemy(e, ep, p, t, stage, rig, now) {
+  e.cut = cutPiece({ blade: tm => pose(tm), t, now, rows: e.rows, rest: EREST(e.i), pos: [ep.x, 0, ep.z],
+    cutPart: `e${e.i}cut`, stage, rig, phi: ep.phi });
   e.mode = 'dying'; e.t0 = now; e.dirty = true;
-  e.cut = { g, n, h, slide, pos, part, split: top.length > 0 && top.length < e.rows.length };
   state.taken++;
   taken.textContent = state.taken;
 }
 
-// Death: the top half slides off along the cut and topples to the board; the base wobbles; then both shrink away
-function dyingPoses(e, now) {
-  const c = e.cut, u = now - e.t0;
-  const hinge = add(EREST(e.i), [0, c.h, 0]);
+function killPlayer(e, ep, p, t, stage, now) {
+  state.dead = cutPiece({ blade: tm => enemyPose(e, tm), t, now, rows: state.pawnRows, rest: [0, 0, 0], pos: [p.x, 0, p.z],
+    cutPart: 'pawncut', stage, rig: state.rig, phi: p.phi });
+  state.act = null;
+  banner.hidden = false;
+}
+
+// Death: the top half slides off along the cut and topples to the board; the base wobbles.
+// Enemies then shrink away; the player's pieces stay where they fell.
+function dyingPoses(c, u, rest, stays) {
+  const hinge = add(rest, [0, c.h, 0]);
   const fall = Math.min(1, Math.max(0, (u - 0.06) / 0.7));
   const slideD = 0.55 * easeOut(Math.min(1, u / 0.45));
   const tip = 1.45 * fall * fall;                                   // topples over, accelerating
   const axis = norm(cross([0, 1, 0], c.slide));
   const drop = -c.h * 0.85 * Math.pow(fall, 2.2) + 0.12 * Math.sin(Math.PI * Math.min(1, u / 0.3));
-  const shrink = u < 1.05 ? 1 : Math.max(0.001, 1 - ease((u - 1.05) / 0.5));
+  const shrink = stays || u < 1.05 ? 1 : Math.max(0.001, 1 - ease((u - 1.05) / 0.5));
   const topA = K.M.mul(uniform(shrink), K.M.rot(axis, tip));
   const topP = add(add(c.pos, [0, c.h, 0]), add(scale(c.slide, slideD), [0, drop, 0]));
   const wob = 1 - 0.12 * Math.exp(-5 * u) * Math.cos(u * 18);
-  const baseA = K.M.mul(uniform(shrink), scaleY(wob));
-  return { topA, topP, baseA, basePos: c.pos, hinge, shrink, rest: EREST(e.i) };
+  const baseA = K.M.mul(K.M.mul(uniform(shrink), scaleY(wob)), rotY(c.phi));
+  return { topA, topP, baseA, basePos: c.pos, hinge, shrink, rest };
 }
+
+// ---------- HUD ----------
+
+const hpEl = document.getElementById('hp'), banner = document.getElementById('banner'), flashEl = document.getElementById('flash');
+function showHp() { hpEl.textContent = '■'.repeat(Math.max(0, state.hp)) + '□'.repeat(Math.max(0, PLAYER_HP - state.hp)); }
+let flashTimer = 0;
+function flash(text) {
+  flashEl.textContent = text; flashEl.hidden = false;
+  clearTimeout(flashTimer); flashTimer = setTimeout(() => { flashEl.hidden = true; }, 600);
+}
+showHp();
+// Restart after death (PLACEHOLDER): R or the button puts the pawn back together where it fell and clears the board
+function restart() { if (state.dead) state.restartPending = true; }
+document.getElementById('restart').addEventListener('click', restart);
 
 // ---------- input ----------
 
@@ -479,6 +636,7 @@ const KEYS = {
 };
 addEventListener('keydown', e => {
   if (e.code === 'KeyW' || e.code === 'ArrowUp') { held.add(e.code); e.preventDefault(); return; }
+  if (e.code === 'KeyR' && !e.repeat) { restart(); return; }
   if (e.repeat || !KEYS[e.code]) return;
   press(...KEYS[e.code]); e.preventDefault();
 });
@@ -503,12 +661,12 @@ canvas.addEventListener('pointermove', e => {
   if (!drag) return;
   const k = 4 / Math.max(innerWidth, 1);
   state.orbit = drag.orbit - (e.clientX - drag.x) * k;
-  state.pitch = Math.min(0.9, Math.max(0.18, drag.pitch + (e.clientY - drag.y) * k));
+  state.pitch = Math.min(PERSP ? 0.9 : 1.2, Math.max(PERSP ? 0.18 : 0.3, drag.pitch + (e.clientY - drag.y) * k));
 });
 const endDrag = () => { drag = null; };
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
-canvas.addEventListener('dblclick', () => { state.orbit = 0; state.pitch = 0.38; });
+canvas.addEventListener('dblclick', () => { state.orbit = 0; state.pitch = CAM.pitch; state.dist = CAM.dist; });
 canvas.addEventListener('wheel', e => {
   state.dist = Math.min(12, Math.max(4.5, state.dist * Math.exp(e.deltaY * 0.001)));
   e.preventDefault();
@@ -539,35 +697,52 @@ function start() {
   const stage = K.stage(world);
   rig.bind(stage);
   for (const e of enemies) e.rows = Int32Array.from(rig.list[rig.part(`e${e.i}`)]);   // this enemy's splats
+  state.pawnRows = Int32Array.from(rig.list[rig.part('pawn')]);
+  state.rig = rig;
 
   let p = pose(0);
   const HIDDEN = [uniform(0.001), [0, 0, 0], [0, -60, 0]];
   stage.add({
     pre() {
-      rig.set('pawn', p.A, [0, 0, 0], [p.x, p.y, p.z]);
-      rig.child('sword', 'pawn', p.swordA, HAND, p.grip);
-      rig.child('shield', 'pawn', p.shieldA, SHIELD_BAKE, p.shieldAt);
+      if (state.restore) { if (state.restoreSplit) rig.assign('pawn', state.pawnRows); state.restore = false; state.restoreSplit = false; }
+      if (state.dead) {
+        state.restoreSplit = state.dead.split;
+        const d = dyingPoses(state.dead, p.now - state.dead.t0, [0, 0, 0], true);
+        rig.set('pawn', d.baseA, d.rest, d.basePos);
+        rig.set('pawncut', d.topA, d.hinge, d.topP);
+        const r = pose(-1);   // sword and shield fall still in their rest grip
+        rig.child('sword', 'pawn', r.swordA, HAND, r.grip);
+        rig.child('shield', 'pawn', r.shieldA, SHIELD_BAKE, r.shieldAt);
+      } else {
+        rig.set('pawn', p.A, [0, 0, 0], [p.x, p.y, p.z]);
+        rig.set('pawncut', ...HIDDEN);
+        rig.child('sword', 'pawn', p.swordA, HAND, p.grip);
+        rig.child('shield', 'pawn', p.shieldA, SHIELD_BAKE, p.shieldAt);
+      }
       const sh = 1 - 0.45 * Math.min(1, p.y / 0.8);
       rig.set('shadow', [sh, 0, 0, 0, 1, 0, 0, 0, sh], [0, 0, 0], [p.x, 0, p.z]);
       for (const e of enemies) {
-        const body = `e${e.i}`, cut = `e${e.i}cut`, shadow = `e${e.i}sh`;
+        const body = `e${e.i}`, cut = `e${e.i}cut`, shadow = `e${e.i}sh`, sword = `e${e.i}sword`;
+        const swordAt = add(EREST(e.i), HAND);
         if (e.restore) {   // put a sliced enemy back together for its next life
           if (e.cut?.split) rig.assign(body, e.rows);
           e.cut = null; e.restore = false;
         }
         if (e.mode === 'off') {
-          if (e.dirty) { for (const n of [body, cut, shadow]) rig.set(n, ...HIDDEN); e.dirty = false; }
+          if (e.dirty) { for (const n of [body, cut, shadow, sword]) rig.set(n, ...HIDDEN); e.dirty = false; }
           continue;
         }
         if (e.mode === 'dying') {
-          const d = dyingPoses(e, p.now);
+          const d = dyingPoses(e.cut, p.now - e.t0, EREST(e.i), false);
           rig.set(body, d.baseA, d.rest, d.basePos);
           rig.set(cut, d.topA, d.hinge, d.topP);
+          rig.child(sword, body, I3, swordAt, swordAt);
           rig.set(shadow, uniform(Math.max(0.001, 0.9 * d.shrink)), d.rest, d.basePos);
           continue;
         }
         const ep = enemyPose(e, p.now);
         rig.set(body, ep.A, EREST(e.i), [ep.x, ep.y, ep.z]);
+        rig.child(sword, body, ep.swordA, swordAt, add(EREST(e.i), ep.grip));   // child positions are in the parent's bake frame
         rig.set(cut, ...HIDDEN);
         const s = 1 - 0.6 * Math.min(1, ep.y / 2);
         rig.set(shadow, [s, 0, 0, 0, 1, 0, 0, 0, s], EREST(e.i), [ep.x, 0, ep.z]);
@@ -592,8 +767,8 @@ function start() {
     last = ms;
     step(now);
     p = pose(now);
-    p.now = now;
     checkHits(prev, p, stage, rig);
+    checkEnemyHits(prev ? prev.now : now, now, stage, rig);
     prev = p;
     window.__frames = (window.__frames || 0) + 1;
 
@@ -609,8 +784,8 @@ function start() {
     }
     if (moved.length) board.updateTransforms(moved);
 
-    // Third-person camera: behind the pawn's facing (3/4 offset), easing round as it turns
-    const goalYaw = p.phi + 0.5 + state.orbit;
+    // Third-person camera: behind the pawn's facing (CAM.yaw offset), easing round as it turns
+    const goalYaw = p.phi + CAM.yaw + state.orbit;
     state.yaw += (goalYaw - state.yaw) * (1 - Math.exp(-dt * 6));
     const [fx, fz] = facingVec(p.phi);
     const goal = [p.x + fx * 0.6, 0.6, p.z + fz * 0.6];
@@ -621,7 +796,7 @@ function start() {
     const { width, height } = artSize();
     renderer.render(world, {
       width, height, time: now, instances: board, changedRows: allRows,
-      camera: { target: state.target, dist: state.dist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch }
+      camera: { target: state.target, dist: state.dist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch, projection: CAM.projection }
     });
     coords.textContent = `${state.sq[0]}, ${-state.sq[1]}`;
     requestAnimationFrame(frame);
