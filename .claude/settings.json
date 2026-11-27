@@ -1,5 +1,5 @@
 {
   "permissions": {
-    "allow": ["Bash(node:*)", "Bash(npx:*)"]
+    "allow": ["Bash(node:*)", "Bash(npx:*)", "Bash(python3:*)"]
   }
 }
