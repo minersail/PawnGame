@@ -87,4 +87,4 @@ INK_STUDIO=../ink-studio node tools/vendor-ink.js   # copies the 60 files the pa
 cd web && python3 -m http.server 8080               # open http://localhost:8080
 ```
 
-`web/ink/` is not committed; re-run `tools/vendor-ink.js` after updating ink-studio. Add `?w=16` to the URL to try a different patch size.
+`web/ink/` holds a copy of the ink-studio files (MIT licence in `web/ink/LICENSE`); re-run `tools/vendor-ink.js` after updating ink-studio. Add `?w=16` to the URL to try a different patch size.

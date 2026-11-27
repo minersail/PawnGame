@@ -289,7 +289,7 @@ function start() {
     const { width, height } = artSize();
     renderer.render(world, {
       width, height, time: now, instances: board,
-      camera: { target: state.target, dist: state.dist, yaw: state.yaw, pitch: state.pitch }
+      camera: { target: state.target, dist: state.dist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch }
     });
     coords.textContent = `${state.sq[0]}, ${-state.sq[1]}`;
     requestAnimationFrame(frame);
