@@ -69,3 +69,22 @@ To convert the clip to GIF/MP4 with ffmpeg, read it with `-f apng -i hop.png`, t
 3. Tag the head separately and use `rig.child` for follow-through wobble on landing.
 4. Try `relighting` so the shading stays fixed to the sun while the pawn tilts.
 5. Measure WebGL frame rate against splat count.
+
+## Endless Board (browser)
+
+`web/` holds a playable page: the pawn from `scenes/hop.js` on a chessboard that never ends, with the same hop animation, driven by the keyboard or an on-screen pad.
+
+- **Controls.** W A S D or the arrow keys hop one square relative to the camera. Holding a key chains hops. Q and E turn the camera a quarter turn. Drag to orbit, scroll to zoom. On touch screens a pad appears.
+- **Rendering.** It uses ink-studio's own bake and WebGL renderer in the browser (`dist/ink-studio.bake.js` plus `src/webgl/`). Nothing is re-implemented.
+- **Endless board.** One light and one dark square are baked once and shared with `createSplatInstances`. A 14×14 patch of copies is kept centred on the pawn; copies that fall off one side are moved to the other. The patch is even-sized, so a recycled square keeps its colour. Fog hides the patch edge. Render coordinates are rebased by an even number of squares when the pawn walks far, so precision never degrades.
+- **Animation.** `hopPose(u)` is the per-hop curve from `hop.js`. The lean axis is `up × direction`, so it works in all four directions. A held key starts the next hop at 90% of the current one.
+
+To run it locally:
+
+```sh
+(cd ../ink-studio && node scripts/build.js)
+INK_STUDIO=../ink-studio node tools/vendor-ink.js   # copies the 60 files the page needs into web/ink/
+cd web && python3 -m http.server 8080               # open http://localhost:8080
+```
+
+`web/ink/` is not committed; re-run `tools/vendor-ink.js` after updating ink-studio. Add `?w=16` to the URL to try a different patch size.
