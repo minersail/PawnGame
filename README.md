@@ -89,7 +89,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Dash.** `dashPose(u)` runs a short coil, a low skim over two squares with a hard forward lean, and a braking skid that rocks back. It reuses the hop's lean and squash matrix.
 - **Parry.** `parryPose(u, side)` draws the shield in, snaps it out to the front diagonal and holds it there, then turns the body a quarter turn so the shield settles in front again. The sword drops back out of the way. Only the snap and hold parry, from about 0.1 to 0.42 s into the 0.7 s move.
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
-- **Shield.** A round ivory shield (a thin ellipsoid with a boss) is a child part of the pawn, held directly in front of the pawn at rest, over the sword. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. During a swing it tucks round to the side the swing ends on, so the blade clears it.
+- **Shield.** An ivory heater shield (a flat-topped outline curving to a point, extruded, with a raised lighter inner panel that leaves a darker rim) is a child part of the pawn, held directly in front of the pawn at rest, over the sword. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. During a swing it tucks round to the side the swing ends on, so the blade clears it.
 - **Camera.** The camera is isometric: an orthographic projection about 35° down (pitch 0.615), straight behind the pawn's facing, easing round as it turns. `?cam=persp` brings back the earlier perspective camera with its 3/4 offset.
 
 ### Lighting
@@ -110,7 +110,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 
 ### Hits and the cut
 
-- **Shapes decide contact; squares decide intent.** Contact uses the signed distance functions the pieces are sculpted from: `pawnSDF` (the pawn's lathe, collar and head) and `shieldSDF` (the shield ellipsoid). A blade point is moved into a piece's own frame by inverting its rig matrix, and counts as touching within `BLADE_R`. Whether a move may start, enemy awareness and spawning stay square-based. Bodies don't push each other.
+- **Shapes decide contact; squares decide intent.** Contact uses the signed distance functions the pieces are sculpted from: `pawnSDF` (the pawn's lathe, collar and head) and `shieldSDF` (an ellipsoid close to the shield's size). A blade point is moved into a piece's own frame by inverting its rig matrix, and counts as touching within `BLADE_R`. Whether a move may start, enemy awareness and spawning stay square-based. Bodies don't push each other.
 - **Detection.** During a slash, points along the blade are tested every frame, with four sub-steps between frames so a fast blade cannot skip a piece. Enemy blades test the player's shield first (only during a parry), then the pawn. A parried blade does no damage.
 - **The cut plane.** On a hit, the cut plane contains the blade's direction and its sweep direction. The enemy's splats above the plane move to a second rig part (`e<n>cut`) with `rig.assign`.
 - **Death animation.** The cut part slides off along the blade's path and topples onto the board while the base wobbles. Both shrink away after about a second. The two parts are then joined again for reuse. The player's pieces use the same cut (rig part `pawncut`) but stay where they fell until a restart.

@@ -128,6 +128,18 @@ function pawnSDF([x, y, z]) {
   d = Math.min(d, Math.max(r - 0.52 * PK, Math.abs(y - cy - ch / 2) - ch / 2));
   return Math.min(d, Math.hypot(x, y - 2.55 * PK, z) - 0.55 * PK);
 }
+// Heater shield outline in the shield's own x/y (centred, about 0.4 wide by 0.5 tall at k = 1): a flat top, straight
+// sides for the upper third, then two arcs that meet in a point at the bottom
+function heaterOutline(k) {
+  const w = 0.2 * k, top = 0.22 * k, shoulder = 0.06 * k, tip = -0.28 * k, pts = [[-w, top], [w, top]];
+  // each side is an arc from the shoulder (x = ±w) down to the tip (x = 0), centred level with the shoulder on the far side
+  const R = ((shoulder - tip) ** 2 + w * w) / (2 * w), cx = w - R;   // circle through (w, shoulder) and (0, tip), centred level with the shoulder
+  const a0 = 0, a1 = -Math.acos((0 - cx) / R);
+  for (let i = 0; i <= 10; i++) { const a = a0 + (a1 - a0) * i / 10; pts.push([cx + R * Math.cos(a), shoulder + R * Math.sin(a)]); }
+  for (let i = 9; i >= 0; i--) { const a = a0 + (a1 - a0) * i / 10; pts.push([-(cx + R * Math.cos(a)), shoulder + R * Math.sin(a)]); }
+  return pts;
+}
+
 // Approximate signed distance to the shield ellipsoid, in its own frame (centre at the origin)
 function shieldSDF(p) {
   const k = Math.hypot(p[0] / SHIELD_R[0], p[1] / SHIELD_R[1], p[2] / SHIELD_R[2]);
@@ -153,9 +165,10 @@ function bakeWorld() {
   sculptSword(S, HAND, { blade: ivory, guard: { r: [1, 2, 3] }, grip: { r: [1, 1, 2] }, pommel: { r: [2, 3, 4] } }, 'sword', 0.018);
   S.bake();
 
-  // Round shield for the off hand: a thin ellipsoid facing -z with a boss, baked on its own; the rig carries it
-  S.ball(SHIELD_BAKE, [0.2, 0.24, 0.032], { r: [2, 3, 4] }, { res: 0.018, tag: 'shield' });
-  S.ball(add(SHIELD_BAKE, [0, 0, -0.03]), 0.055, { r: [3, 4, 5] }, { res: 0.016, tag: 'shield' });
+  // Heater shield for the off hand: flat top, straight upper sides curving to a point, facing -z, baked on its own;
+  // a raised inner panel in a lighter ramp leaves a darker rim round the edge. The rig carries it.
+  S.extrude([heaterOutline(1)], SHIELD_BAKE, 0.04, { r: [2, 3, 4] }, { rd: 0.01, res: 0.016, tag: 'shield' });
+  S.extrude([heaterOutline(0.78)], add(SHIELD_BAKE, [0, 0.008, -0.016]), 0.024, { r: [3, 4, 5] }, { rd: 0.006, res: 0.014, tag: 'shield' });
   S.bake();
 
   // Enemy pool: identical dark pawns, all baked at the origin and placed by the rig
