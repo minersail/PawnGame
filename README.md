@@ -14,6 +14,7 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 | `scenes/pawn.js` | Offline scene: the static pawn on a small ground patch. |
 | `scenes/hop.js` | Offline scene: the pawn hopping across a 3×4 board. The game's hop curve comes from here. |
 | `renders/` | Offline renders of the two scenes, a turntable, the hop clip (GIF, MP4, APNG, contact sheet) and a six-panel pipeline breakdown. |
+| `tools/sim-parry.js` | Runs the game's pose and contact maths in Node, without rendering, to check parry timing against an enemy swing in seconds. |
 | `tools/vendor-ink.js` | Copies the ink-studio files the page imports into `web/ink/`. |
 | `tools/dump_stages.js`, `tools/draw_stages.py` | Produce `renders/pipeline-stages.png`. Panels 2–5 use a standalone Python splat projection, not the library renderer. |
 | `.claude/settings.json` | Permission rules and auto-mode guidance for Claude Code sessions in this repo. |
@@ -36,7 +37,7 @@ On touch screens the board takes swipes, and the only button is **Shield**. A sw
 
 A swing sweeps the blade from about 100° on one side of the pawn's facing to 100° on the other, covering both front diagonals. The pawn ends it facing a quarter turn toward the swing, and hops then go in that direction. A swing pressed during a hop runs after the landing. An enemy on the square ahead blocks a hop.
 
-A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A parry beats the shield out across the front and round to one side, and turns the pawn a quarter turn that way, like a swing. At rest the shield is held directly in front of the pawn, over the sword. Zooming out pulls the camera back 1.6× until the next move.
+A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A parry bashes the shield out in a wide arc round the front to one side, like swinging a door open, and turns the pawn a quarter turn that way, like a swing. At rest the shield is held directly in front of the pawn, over the sword. Zooming out pulls the camera back 1.6× until the next move.
 
 Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield during a parry's beat is parried: the enemy staggers back and its blade springs away. The resting shield does not block (`?passive=1` makes it block). A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
 
@@ -87,7 +88,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Hop.** `hopPose(u)` is the hop curve from `scenes/hop.js`: crouch, arc, landing squash, settle. The lean axis is `up × direction`, so it works in any direction. A held key starts the next hop at 90% of the current one.
 - **Swing.** `swingPose(u, side)` runs wind-up, slash and recovery over 0.7 s. During the slash the arm extends, the blade swings flat round the front, and the body follows a quarter turn.
 - **Dash.** `dashPose(u)` runs a short coil, a low skim over two squares with a hard forward lean, and a braking skid that rocks back. It reuses the hop's lean and squash matrix.
-- **Parry.** `parryPose(u, side)` draws the shield in, snaps it out to the front diagonal and holds it there, then turns the body a quarter turn so the shield settles in front again. The sword drops back out of the way. Only the snap and hold parry, from about 0.1 to 0.42 s into the 0.7 s move.
+- **Parry.** `parryPose(u, side)` is a wide bash, like swinging a door open. The shield cocks back across the body, then sweeps out about 80° (`PARRY_ARC`) round the front to the parry side, its face turning ahead of the arc on its own axis (`face`). It holds there braced, then the body takes a quarter turn and the shield settles in front again. The sword drops back out of the way. Only the bash and hold parry, from about 0.1 to 0.42 s into the 0.7 s move.
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
 - **Shield.** An ivory heater shield (a flat-topped outline curving to a point, extruded, with a raised lighter inner panel that leaves a darker rim) is a child part of the pawn, held directly in front of the pawn at rest, over the sword. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. During a swing it tucks round to the side the swing ends on, so the blade clears it.
 - **Camera.** The camera is isometric: an orthographic projection about 35° down (pitch 0.615), straight behind the pawn's facing, easing round as it turns. `?cam=persp` brings back the earlier perspective camera with its 3/4 offset.
@@ -111,7 +112,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 ### Hits and the cut
 
 - **Shapes decide contact; squares decide intent.** Contact uses the signed distance functions the pieces are sculpted from: `pawnSDF` (the pawn's lathe, collar and head) and `shieldSDF` (an ellipsoid close to the shield's size). A blade point is moved into a piece's own frame by inverting its rig matrix, and counts as touching within `BLADE_R`. Whether a move may start, enemy awareness and spawning stay square-based. Bodies don't push each other.
-- **Detection.** During a slash, points along the blade are tested every frame, with four sub-steps between frames so a fast blade cannot skip a piece. Enemy blades test the player's shield first (only during a parry), then the pawn. A parried blade does no damage.
+- **Detection.** During a slash, points along the blade are tested every frame, with sub-steps between frames (one per 4 ms, at least four) so a fast blade cannot skip a piece. Enemy blades test the player's shield first (only during a parry), then the pawn. A parried blade does no damage.
 - **The cut plane.** On a hit, the cut plane contains the blade's direction and its sweep direction. The enemy's splats above the plane move to a second rig part (`e<n>cut`) with `rig.assign`.
 - **Death animation.** The cut part slides off along the blade's path and topples onto the board while the base wobbles. Both shrink away after about a second. The two parts are then joined again for reuse. The player's pieces use the same cut (rig part `pawncut`) but stay where they fell until a restart.
 - **Counter.** The **Taken** counter in the HUD counts hits.

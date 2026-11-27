@@ -268,30 +268,38 @@ function dashPose(u) {
   return { along, y, sy, tilt };
 }
 
-// One parry with u in [0, 1]; side +1 parries left, -1 right. The shield draws in, beats out to that front
-// diagonal and holds there (the parry window), then the body follows a quarter turn, so the pawn ends facing that
-// way with the shield back in front. `parrying` marks the window, when the shield turns blades aside.
+// One parry with u in [0, 1]; side +1 parries left, -1 right. A wide bash, like swinging a door open: the shield
+// cocks back across the body, then sweeps out in a wide arc round the front to that side, its flat face leading the
+// way (it turns further than the arc, like a door on its hinge), and holds there braced (the parry window). Then the
+// body follows a quarter turn, so the pawn ends facing that way with the shield back in front. `parrying` marks the
+// window, when the shield turns blades aside.
+const PARRY_ARC = num('arc', 1.4);    // how far round the bash carries the shield, in radians from the front (about 80°)
 function parryPose(u, side) {
-  let world, turn, up, parrying = false;
-  if (u < 0.15) {                    // draw in: shield up and pulled a little across the body
+  let world, turn, up, face, out, parrying = false;
+  if (u < 0.15) {                    // cock: shield pulled back across the body, face angled away, the body coils
     const a = ease(u / 0.15);
-    world = -side * 0.3 * a; turn = -side * 0.06 * a; up = a;
-  } else if (u < 0.3) {              // beat: shield snaps out to the front diagonal
-    const a = easeOut((u - 0.15) / 0.15);
-    world = side * (-0.3 + (Math.PI / 4 + 0.3) * a); turn = side * (-0.06 + 0.3 * a); up = 1; parrying = true;
-  } else if (u < 0.6) {              // hold the diagonal, braced; the body leans into it
-    const a = (u - 0.3) / 0.3;
-    world = side * Math.PI / 4; turn = side * (0.24 + 0.1 * a); up = 1; parrying = true;
-  } else {                           // turn: body follows a quarter turn and the shield settles in front again
+    world = -side * 0.55 * a; turn = -side * 0.12 * a; up = a; face = -side * 0.35 * a; out = -0.06 * a;
+  } else if (u < 0.36) {             // bash: a wide arc out round the front, the face swinging ahead like a door
+    const a = easeOut((u - 0.15) / 0.21);
+    world = side * (-0.55 + (PARRY_ARC + 0.55) * a);
+    turn = side * (-0.12 + 0.42 * a);
+    face = side * (-0.35 + 0.8 * Math.sin(Math.PI * Math.min(1, a * 1.15)) + 0.6 * a);
+    up = 1; out = -0.06 + 0.16 * Math.sin(Math.PI * a) + 0.06 * a; parrying = true;
+  } else if (u < 0.6) {              // hold it swung open, braced, with a small settle back from the overshoot
+    const a = (u - 0.36) / 0.24;
+    world = side * (PARRY_ARC - 0.1 * ease(a)); turn = side * (0.3 + 0.06 * a);
+    face = side * 0.25 * (1 - 0.4 * ease(a)); up = 1; out = 0; parrying = true;
+  } else {                           // turn: body follows a quarter turn and the shield swings back in front
     const a = ease((u - 0.6) / 0.4);
-    world = side * (Math.PI / 4 + Math.PI / 4 * a);
-    turn = side * (0.34 + (Math.PI / 2 - 0.34) * a); up = 1 - a;
+    const w0 = PARRY_ARC - 0.1;
+    world = side * (w0 + (Math.PI / 2 - w0) * a);
+    turn = side * (0.36 + (Math.PI / 2 - 0.36) * a); up = 1 - a; face = side * 0.15 * (1 - a); out = 0;
   }
   const k = Math.sin(Math.PI * u);
   return {
     turn, parrying, sy: 1 - 0.06 * up,
-    shield: { sweep: world - turn, y: SHIELD_REST.y + (SHIELD_GUARD.y - SHIELD_REST.y) * up,
-      r: SHIELD_REST.r + (SHIELD_GUARD.r - SHIELD_REST.r) * up, tilt: -0.2 * up },
+    shield: { sweep: world - turn, face, y: SHIELD_REST.y + (SHIELD_GUARD.y - SHIELD_REST.y) * up,
+      r: SHIELD_REST.r + (SHIELD_GUARD.r - SHIELD_REST.r) * up + out, tilt: -0.2 * up },
     sword: { sweep: -side * 0.45 * k, lean: -0.35 * k }   // the sword drops back out of the shield's way
   };
 }
@@ -494,7 +502,7 @@ function pose(now) {
   const swordA = K.M.mul(rotY(sweep), K.M.rot([1, 0, 0], -lean));
   // Shield: carried round the pawn's axis, its face pointing outward along `sweep`
   const shieldAt = mv(rotY(sh.sweep), [0, sh.y, -sh.r]);
-  const shieldA = K.M.mul(rotY(sh.sweep), K.M.rot([1, 0, 0], sh.tilt));
+  const shieldA = K.M.mul(rotY(sh.sweep + (sh.face || 0)), K.M.rot([1, 0, 0], sh.tilt));   // face: extra turn of the shield on its own axis
   return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, parrying, u, side, now };
 }
 
@@ -549,13 +557,16 @@ const toLocal = (p, q) => mv(inv3(p.A), sub(q, [p.x, p.y, p.z]));
 const touchesPawn = (p, q) => pawnSDF(toLocal(p, q)) < BLADE_R;
 const touchesShield = (p, q) => shieldSDF(mv(inv3(p.shieldA), sub(toLocal(p, q), p.shieldAt))) < BLADE_R;
 const BLADE_TS = []; for (let t = 0.2; t <= BLADE[1] + 1e-6; t += 0.08) BLADE_TS.push(t);
-const STEPS = 4;   // sub-steps between frames, so a fast blade can't skip through a piece
+// Sub-steps between frames (one per 4 ms, at least 4), so a fast blade can't skip through a piece or a shield at
+// low frame rates
+const stepsFor = dt => Math.min(40, Math.max(4, Math.ceil(dt / 0.004)));
 
 // The player's blade against each enemy's shape
 function checkHits(prev, cur, stage, rig) {
   if (state.dead || (!cur.slashing && !prev?.slashing)) return;
   for (const e of enemies) {
     if (!['idle', 'hop', 'drop', 'swing'].includes(e.mode)) continue;
+    const STEPS = prev ? stepsFor(cur.now - prev.now) : 1;
     for (let s = 1; s <= STEPS && e.mode !== 'dying'; s++) {
       const tm = !prev ? cur.now : prev.now + (cur.now - prev.now) * s / STEPS;
       const p = s === STEPS || !prev ? cur : pose(tm), ep = enemyPose(e, tm);
@@ -570,6 +581,7 @@ function checkEnemyHits(prevNow, now, stage, rig) {
   if (state.dead) return;
   for (const e of enemies) {
     if (e.mode !== 'swing' || e.struck || e.blocked) continue;
+    const STEPS = stepsFor(now - prevNow);
     for (let s = 1; s <= STEPS; s++) {
       const tm = prevNow + (now - prevNow) * s / STEPS;
       const ep = enemyPose(e, tm);
