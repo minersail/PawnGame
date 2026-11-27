@@ -74,7 +74,11 @@ To convert the clip to GIF/MP4 with ffmpeg, read it with `-f apng -i hop.png`, t
 
 `web/` holds a playable page: the pawn from `scenes/hop.js` on a chessboard that never ends, with the same hop animation, driven by the keyboard or an on-screen pad.
 
-- **Controls.** W A S D or the arrow keys hop one square relative to the camera. Holding a key chains hops. Q and E turn the camera a quarter turn. Drag to orbit, scroll to zoom. On touch screens a pad appears.
+- **Controls.** W or ↑ hops forward (hold to keep going). A/D, ←/→ or Q/E swing the sword left or right; a swing sweeps about 100° either side of the facing, covering the front diagonals, and turns the pawn a quarter turn that way. Drag to orbit, double-click to reset, scroll to zoom. On touch screens: ◀ Swing, ↑, Swing ▶.
+- **Enemies.** A pool of dark pawns (rig parts `e0`…) drop in from all four sides and hop forward at random intervals; they despawn in the fog. Each is baked in its own pass at its own spot (`EREST`), because solids in one bake merge.
+- **Cutting.** On a hit, the cut plane holds the blade and its sweep direction. The enemy's splats above the plane are moved to a second rig part with `rig.assign`, which then slides off along the cut and topples while the base wobbles. Both shrink away and the parts are re-joined for reuse.
+- **Live lighting.** `K.light.capture` + `K.light.system` with a live `sun` re-shade the player's pawn and sword from their turned normals each frame (`?light=baked` turns it off).
+- **Testing hooks.** `?slow=8` slows time; `window.__clock` replaces the clock; `window.__endless` and `window.__enemies` expose state.
 - **Rendering.** It uses ink-studio's own bake and WebGL renderer in the browser (`dist/ink-studio.bake.js` plus `src/webgl/`). Nothing is re-implemented.
 - **Endless board.** One light and one dark square are baked once and shared with `createSplatInstances`. A 14×14 patch of copies is kept centred on the pawn; copies that fall off one side are moved to the other. The patch is even-sized, so a recycled square keeps its colour. Fog hides the patch edge. Render coordinates are rebased by an even number of squares when the pawn walks far, so precision never degrades.
 - **Animation.** `hopPose(u)` is the per-hop curve from `hop.js`. The lean axis is `up × direction`, so it works in all four directions. A held key starts the next hop at 90% of the current one.
