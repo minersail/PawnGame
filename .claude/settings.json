@@ -1,5 +1,12 @@
 {
   "permissions": {
     "allow": ["Bash(node:*)", "Bash(npx:*)", "Bash(python3:*)"]
+  },
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Building and running the ink-studio checkout next to this repo (../ink-studio), including its build scripts and CLI, is expected for this project.",
+      "Starting local static file servers and driving headless Chromium/Playwright against localhost to test the web/ page is expected."
+    ]
   }
 }

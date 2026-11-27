@@ -145,6 +145,7 @@ const state = {
   orbit: 0, pitch: 0.38, dist: 7.5, yaw: 0.5,
   target: [0, 0.6, 0]
 };
+window.__endless = state; // for tests
 const held = new Set();   // sources holding "forward"
 let queued = null;         // a swing (+1 / -1) or 'hop' waiting for the current action to finish
 
@@ -247,6 +248,7 @@ function artSize() {
   return { width: Math.round(ART_HEIGHT * aspect), height: ART_HEIGHT };
 }
 
+const SLOW = Number(new URLSearchParams(location.search).get('slow')) || 1; // ?slow=8 plays everything 8x slower, for inspection
 const LIVE_LIGHT = new URLSearchParams(location.search).get('light') !== 'baked';
 
 function start() {
@@ -287,12 +289,16 @@ function start() {
   status.hidden = true;
   console.log('baked in', Math.round(performance.now() - t0), 'ms;', world.count, 'pawn+sword splats,', light.count + dark.count, 'per square pair; live light', LIVE_LIGHT);
 
+  // The pawn, sword and shadow are re-posed every frame: mark all of their rows changed
+  const allRows = Array.from({ length: Math.ceil(world.count / 512) }, (_, i) => i);
   let last = performance.now();
   function frame(ms) {
-    const now = ms / 1000, dt = Math.min(0.1, (ms - last) / 1000);
+    // window.__clock (seconds), when a test sets it, replaces the real clock so frames can be inspected one by one
+    const now = window.__clock ?? ms / 1000 / SLOW, dt = window.__clock !== undefined ? 1 / 60 : Math.min(0.1, (ms - last) / 1000 / SLOW);
     last = ms;
     step(now);
     p = pose(now);
+    window.__frames = (window.__frames || 0) + 1;
 
     // Keep a WINDOW × WINDOW patch of squares centred on the pawn
     const cx = Math.round(p.x / SQ), cz = Math.round(p.z / SQ), moved = [];
@@ -317,7 +323,7 @@ function start() {
     world.anim.update(dt, now);
     const { width, height } = artSize();
     renderer.render(world, {
-      width, height, time: now, instances: board,
+      width, height, time: now, instances: board, changedRows: allRows,
       camera: { target: state.target, dist: state.dist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch }
     });
     coords.textContent = `${state.sq[0]}, ${-state.sq[1]}`;
