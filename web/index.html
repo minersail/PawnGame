@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-  /* Layout: the board fills the screen; a quiet HUD sits in the corners, pad bottom-left on touch. */
+  /* Layout: the board fills the screen; a quiet HUD sits in the corners, touch buttons along the bottom. */
   :root {
     --bg: #0b0d14;        /* palette slot 0 */
     --ink: #e2cfae;       /* ivory ramp 4 */
@@ -56,44 +56,35 @@
     position: fixed; inset: 0; display: grid; place-items: center; padding: 0 16px;
     font: 400 14px var(--font-display); letter-spacing: 0.08em; color: var(--ink); text-align: center;
   }
-  .pad {
-    position: fixed; display: none;
-    left: max(16px, env(safe-area-inset-left, 0px));
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
-    grid-template-columns: repeat(3, 52px); grid-template-rows: repeat(3, 52px); gap: 4px;
-  }
-  .turns {
-    position: fixed; display: none; gap: 8px;
-    right: max(16px, env(safe-area-inset-right, 0px));
+  .controls {
+    position: fixed; display: none; align-items: flex-end; justify-content: space-between; gap: 12px;
+    left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
     bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
   }
-  .pad button, .turns button {
-    width: 52px; height: 52px; border-radius: 6px; border: 1px solid var(--slate-hi);
+  .controls button {
+    min-width: 76px; height: 60px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--slate-hi);
     background: color-mix(in srgb, var(--slate) 80%, transparent); color: var(--ink);
-    font: 400 18px var(--font-display); touch-action: none; cursor: pointer;
+    font: 400 13px var(--font-display); letter-spacing: 0.04em; touch-action: none; cursor: pointer;
   }
-  .pad button:active, .turns button:active { background: var(--slate-hi); }
-  .pad button:focus-visible, .turns button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .pad [data-dir="up"] { grid-area: 1 / 2; }
-  .pad [data-dir="left"] { grid-area: 2 / 1; }
-  .pad [data-dir="right"] { grid-area: 2 / 3; }
-  .pad [data-dir="down"] { grid-area: 3 / 2; }
+  .controls .hop { min-width: 88px; height: 76px; font-size: 22px; }
+  .controls button:active { background: var(--slate-hi); }
+  .controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   @media (pointer: coarse) {
-    .pad { display: grid; }
-    .turns { display: flex; }
+    .controls { display: flex; }
     .keys { display: none; }
   }
 </style>
 </head>
 <body>
 
-<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. Arrow keys or WASD hop one square."></canvas>
+<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; A and D swing the sword."></canvas>
 
 <div class="hud top">
   <h1>Endless Board</h1>
   <div class="keys">
-    <div><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> or arrows: hop</div>
-    <div><kbd>Q</kbd><kbd>E</kbd>: turn camera · drag: orbit · scroll: zoom</div>
+    <div><kbd>W</kbd> or <kbd>↑</kbd>: hop forward (hold to keep going)</div>
+    <div><kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd>: swing left / right</div>
+    <div>Drag: orbit · double-click: reset · scroll: zoom</div>
   </div>
 </div>
 <div class="hud corner">
@@ -103,15 +94,10 @@
 
 <div id="status">Baking splats…</div>
 
-<div class="pad" aria-label="Hop">
-  <button type="button" id="pad-up" data-dir="up" aria-label="Hop forward">↑</button>
-  <button type="button" id="pad-left" data-dir="left" aria-label="Hop left">←</button>
-  <button type="button" id="pad-right" data-dir="right" aria-label="Hop right">→</button>
-  <button type="button" id="pad-down" data-dir="down" aria-label="Hop back">↓</button>
-</div>
-<div class="turns">
-  <button type="button" id="turn-left" data-turn="-1" aria-label="Turn camera left">⟲</button>
-  <button type="button" id="turn-right" data-turn="1" aria-label="Turn camera right">⟳</button>
+<div class="controls">
+  <button type="button" id="swing-left" data-swing="1" aria-label="Swing left">◀ Swing</button>
+  <button type="button" id="pad-up" class="hop" aria-label="Hop forward">↑</button>
+  <button type="button" id="swing-right" data-swing="-1" aria-label="Swing right">Swing ▶</button>
 </div>
 
 <script src="ink/dist/ink-studio.bake.js"></script>
