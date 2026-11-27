@@ -22,20 +22,23 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 
 | Action | Keyboard | Touch |
 | --- | --- | --- |
-| Hop forward one square (hold to keep hopping) | W or ↑ | ↑ |
-| Swing left / right | A / D, ← / →, or Q / E | ◀ Swing / Swing ▶ |
-| Dash two squares forward | Space or Shift | Dash ⇈ |
-| Block left / right | Z / C | ◀ Block / Block ▶ |
+| Hop forward one square (hold to keep hopping) | W or ↑ | Short swipe up |
+| Dash two squares forward | Space, or Shift + W | Long swipe up |
+| Swing left / right | A / D or ← / → | Swipe left / right |
+| Parry left / right | Hold S or Shift + A / D, or Q / E | Hold **Shield** + swipe left / right |
+| Zoom out (until the next move) | Z | Swipe down |
 | Restart after being cut down | R | Restart |
-| Orbit the camera | Drag | Drag |
+| Orbit the camera | Drag | |
 | Reset the camera | Double-click | |
 | Zoom | Scroll | |
 
+On touch screens the board takes swipes, and the only button is **Shield**. A swipe up longer than a fifth of the screen height (at least 90 px) is a dash.
+
 A swing sweeps the blade from about 100° on one side of the pawn's facing to 100° on the other, covering both front diagonals. The pawn ends it facing a quarter turn toward the swing, and hops then go in that direction. A swing pressed during a hop runs after the landing. An enemy on the square ahead blocks a hop.
 
-A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A block raises the shield to guard the front-left or front-right diagonal for 0.6 s, then lowers it; the pawn keeps its facing. The new keys are placeholders.
+A dash covers two squares in one fast, low move, a nod to the pawn's opening move. An enemy on either square cancels it. A parry beats the shield out across the front and round to one side, and turns the pawn a quarter turn that way, like a swing. At rest the shield is held directly in front of the pawn, over the sword. Zooming out pulls the camera back 1.6× until the next move.
 
-Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield is blocked, whether the shield is raised or resting at the pawn's side. A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
+Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield during a parry's beat is parried: the enemy staggers back and its blade springs away. The resting shield does not block (`?passive=1` makes it block). A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
 
 ## Engine: ink-studio
 
@@ -84,9 +87,9 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Hop.** `hopPose(u)` is the hop curve from `scenes/hop.js`: crouch, arc, landing squash, settle. The lean axis is `up × direction`, so it works in any direction. A held key starts the next hop at 90% of the current one.
 - **Swing.** `swingPose(u, side)` runs wind-up, slash and recovery over 0.7 s. During the slash the arm extends, the blade swings flat round the front, and the body follows a quarter turn.
 - **Dash.** `dashPose(u)` runs a short coil, a low skim over two squares with a hard forward lean, and a braking skid that rocks back. It reuses the hop's lean and squash matrix.
-- **Block.** `blockPose(u, side)` brings the shield up and out to a front diagonal, holds it, and lowers it. The body twists slightly toward the guard and the sword drops back out of the way.
+- **Parry.** `parryPose(u, side)` draws the shield in, snaps it out to the front diagonal and holds it there, then turns the body a quarter turn so the shield settles in front again. The sword drops back out of the way. Only the snap and hold parry, from about 0.1 to 0.42 s into the 0.7 s move.
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
-- **Shield.** A round ivory shield (a thin ellipsoid with a boss) is a child part of the pawn, held on its left side at rest. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. It tucks behind the pawn during a swing so the blade clears it.
+- **Shield.** A round ivory shield (a thin ellipsoid with a boss) is a child part of the pawn, held directly in front of the pawn at rest, over the sword. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. During a swing it tucks round to the side the swing ends on, so the blade clears it.
 - **Camera.** The camera is isometric: an orthographic projection about 35° down (pitch 0.615), straight behind the pawn's facing, easing round as it turns. `?cam=persp` brings back the earlier perspective camera with its 3/4 offset.
 
 ### Lighting
@@ -108,7 +111,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 ### Hits and the cut
 
 - **Shapes decide contact; squares decide intent.** Contact uses the signed distance functions the pieces are sculpted from: `pawnSDF` (the pawn's lathe, collar and head) and `shieldSDF` (the shield ellipsoid). A blade point is moved into a piece's own frame by inverting its rig matrix, and counts as touching within `BLADE_R`. Whether a move may start, enemy awareness and spawning stay square-based. Bodies don't push each other.
-- **Detection.** During a slash, points along the blade are tested every frame, with four sub-steps between frames so a fast blade cannot skip a piece. Enemy blades test the player's shield first, then the pawn. A blocked enemy blade springs back and does no damage.
+- **Detection.** During a slash, points along the blade are tested every frame, with four sub-steps between frames so a fast blade cannot skip a piece. Enemy blades test the player's shield first (only during a parry), then the pawn. A parried blade does no damage.
 - **The cut plane.** On a hit, the cut plane contains the blade's direction and its sweep direction. The enemy's splats above the plane move to a second rig part (`e<n>cut`) with `rig.assign`.
 - **Death animation.** The cut part slides off along the blade's path and topples onto the board while the base wobbles. Both shrink away after about a second. The two parts are then joined again for reuse. The player's pieces use the same cut (rig part `pawncut`) but stay where they fell until a restart.
 - **Counter.** The **Taken** counter in the HUD counts hits.
@@ -137,8 +140,9 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | `?enemies=3` | Sets the enemy pool size. |
 | `?w=16` | Sets the board patch size (keep it even). |
 | `?slow=8` | Plays everything 8× slower. |
-| `?hop=1&dash=0.45&swing=0.7&block=0.6` | Sets the length of each move in seconds, for feel testing. |
+| `?hop=1&dash=0.45&swing=0.7&parry=0.55` | Sets the length of each move in seconds, for feel testing. |
 | `?windup=0.5` | Sets the enemy wind-up in seconds. |
+| `?passive=1` | Lets the resting shield block blades too. |
 | `?eside=-1` | Makes enemies swing from their left instead of their right. |
 | `?cam=persp` | Uses the earlier perspective camera instead of the isometric one. |
 | `?hp=3&invuln=1` | Sets the player's hit points and the invulnerable time after a hit. |
@@ -148,6 +152,7 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 - **Clock.** Setting `window.__clock` (seconds) replaces the real clock, so a test can step frames to exact times.
 - **State.** `window.__endless` exposes game state (including `hp` and `dead`), and `window.__enemies` the enemy pool.
 - **Frame counter.** `window.__frames` counts frames.
+- **Swipes.** `window.__swipe(dx, dy)` performs a touch swipe in pixels (negative dy is up).
 - **Software rendering.** Headless Chromium with SwiftShader renders at about 1–2 fps, so tests step the clock instead of relying on real time.
 
 ## Offline scenes

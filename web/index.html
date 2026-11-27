@@ -70,7 +70,7 @@
     font: 400 14px var(--font-display); letter-spacing: 0.08em; color: var(--ink); text-align: center;
   }
   .controls {
-    position: fixed; display: none; align-items: flex-end; justify-content: space-between; gap: 12px;
+    position: fixed; display: none; pointer-events: none; align-items: flex-end; justify-content: space-between; gap: 12px;
     left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
     bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
   }
@@ -79,9 +79,9 @@
     background: color-mix(in srgb, var(--slate) 80%, transparent); color: var(--ink);
     font: 400 13px var(--font-display); letter-spacing: 0.04em; touch-action: none; cursor: pointer;
   }
-  .controls .hop { min-width: 88px; height: 76px; font-size: 22px; }
-  .controls .stack { display: flex; flex-direction: column; gap: 10px; }
-  .controls .stack button:first-child { height: 48px; }
+  .controls .shield { min-width: 96px; height: 76px; pointer-events: auto; }
+  .controls .shield.on { background: var(--slate-hi); border-color: var(--ink); }
+  .touch-hint { color: var(--ink-dim); font-size: 11px; line-height: 1.5; pointer-events: none; }
   .controls button:active { background: var(--slate-hi); }
   .controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   @media (pointer: coarse) {
@@ -92,15 +92,16 @@
 </head>
 <body>
 
-<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; A and D swing the sword; Space dashes; Z and C block."></canvas>
+<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; A and D swing the sword; Space dashes; S plus A or D parries; Z zooms out."></canvas>
 
 <div class="hud top">
   <h1>Endless Board</h1>
   <div class="keys">
     <div><kbd>W</kbd> or <kbd>↑</kbd>: hop forward (hold to keep going)</div>
+    <div><kbd>Space</kbd> or <kbd>Shift</kbd>+<kbd>W</kbd>: dash two squares</div>
     <div><kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd>: swing left / right</div>
-    <div><kbd>Space</kbd> or <kbd>Shift</kbd>: dash two squares</div>
-    <div><kbd>Z</kbd> <kbd>C</kbd>: block left / right</div>
+    <div>Hold <kbd>S</kbd> or <kbd>Shift</kbd> + <kbd>A</kbd> <kbd>D</kbd> (or <kbd>Q</kbd> <kbd>E</kbd>): parry left / right</div>
+    <div><kbd>Z</kbd>: zoom out (any move zooms back in)</div>
     <div><kbd>R</kbd>: restart after you're cut down</div>
     <div>Drag: orbit · double-click: reset · scroll: zoom</div>
   </div>
@@ -123,18 +124,8 @@
 <div id="status">Baking splats…</div>
 
 <div class="controls">
-  <div class="stack">
-    <button type="button" id="block-left" data-move="block" data-side="1" aria-label="Block left">◀ Block</button>
-    <button type="button" id="swing-left" data-move="swing" data-side="1" aria-label="Swing left">◀ Swing</button>
-  </div>
-  <div class="stack">
-    <button type="button" id="dash" data-move="dash" aria-label="Dash two squares forward">Dash ⇈</button>
-    <button type="button" id="pad-up" class="hop" aria-label="Hop forward">↑</button>
-  </div>
-  <div class="stack">
-    <button type="button" id="block-right" data-move="block" data-side="-1" aria-label="Block right">Block ▶</button>
-    <button type="button" id="swing-right" data-move="swing" data-side="-1" aria-label="Swing right">Swing ▶</button>
-  </div>
+  <div class="touch-hint">Swipe ↑ hop · long ↑ dash · ← → swing · ↓ zoom out<br>Hold Shield + swipe ← → to parry</div>
+  <button type="button" id="shield" class="shield" aria-label="Hold to parry with the next swipe left or right">Shield</button>
 </div>
 
 <script src="ink/dist/ink-studio.bake.js"></script>

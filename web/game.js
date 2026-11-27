@@ -19,10 +19,13 @@ const SWING = num('swing', 0.7);   // seconds per swing
 const DASH = num('dash', 0.45);    // seconds per dash
 const DASH_SQUARES = 2;            // a dash covers two squares, like a pawn's opening move
 const DASH_BLOCKED = 'cancel';     // PLACEHOLDER: an enemy on either square cancels the dash (it does not stop short)
-const BLOCK = num('block', 0.6);   // PLACEHOLDER: a block is a fixed-length move, not held
-const BLOCK_TURNS = false;         // PLACEHOLDER: blocking does not change the pawn's facing
-const SHIELD_REST = { sweep: 1.45, y: 0.5, r: 0.34 };   // off hand at rest: on the pawn's left side
-const SHIELD_GUARD = { y: 0.78, r: 0.5 };                // raised to guard a front diagonal
+const PARRY = num('parry', 0.7);   // seconds per parry (window: 0.1–0.42 s in)
+const PARRY_TURNS = true;          // a parry turns the pawn a quarter turn toward its side, like a swing
+const PASSIVE_BLOCK = params.get('passive') === '1';   // PLACEHOLDER: the resting shield does not block; only a parry does
+const SHIELD_REST = { sweep: 0, y: 0.62, r: 0.44 };     // at rest: directly in front of the pawn, over the sword
+const SHIELD_GUARD = { y: 0.74, r: 0.52 };               // raised and pushed out during a parry
+const SHIELD_TUCK = { sweep: 1.7, y: 0.5, r: 0.34 };     // out of the blade's way during a swing (sweep is x side)
+const ZOOM_OUT = 1.6;              // swipe down / Z: the camera pulls back this much until the next control
 const SHIELD_BAKE = [-24, 0.6, 40];                      // baked away from the pawn so it picks up no baked shadow
 const SHIELD_R = [0.2, 0.24, 0.032];                     // shield ellipsoid radii (faces -z when baked)
 // Enemy attacks and health. PLACEHOLDER values wait on design.
@@ -252,20 +255,31 @@ function dashPose(u) {
   return { along, y, sy, tilt };
 }
 
-// One block with u in [0, 1]; side +1 guards the front-left diagonal, -1 the front-right.
-// The shield comes up and out to that diagonal, holds, and drops back to the pawn's side.
-function blockPose(u, side) {
-  const up = u < 0.25 ? easeOut(u / 0.25) : u < 0.7 ? 1 : 1 - ease((u - 0.7) / 0.3);
-  const turn = side * 0.22 * up;                                  // the body twists a little toward the guard
-  const goal = side * Math.PI / 4 - turn;                         // shield sweep, relative to the body
-  const jolt = u > 0.2 && u < 0.45 ? 0.04 * Math.sin(Math.PI * (u - 0.2) / 0.25) : 0;   // braces as it lands
+// One parry with u in [0, 1]; side +1 parries left, -1 right. The shield draws in, beats out to that front
+// diagonal and holds there (the parry window), then the body follows a quarter turn, so the pawn ends facing that
+// way with the shield back in front. `parrying` marks the window, when the shield turns blades aside.
+function parryPose(u, side) {
+  let world, turn, up, parrying = false;
+  if (u < 0.15) {                    // draw in: shield up and pulled a little across the body
+    const a = ease(u / 0.15);
+    world = -side * 0.3 * a; turn = -side * 0.06 * a; up = a;
+  } else if (u < 0.3) {              // beat: shield snaps out to the front diagonal
+    const a = easeOut((u - 0.15) / 0.15);
+    world = side * (-0.3 + (Math.PI / 4 + 0.3) * a); turn = side * (-0.06 + 0.3 * a); up = 1; parrying = true;
+  } else if (u < 0.6) {              // hold the diagonal, braced; the body leans into it
+    const a = (u - 0.3) / 0.3;
+    world = side * Math.PI / 4; turn = side * (0.24 + 0.1 * a); up = 1; parrying = true;
+  } else {                           // turn: body follows a quarter turn and the shield settles in front again
+    const a = ease((u - 0.6) / 0.4);
+    world = side * (Math.PI / 4 + Math.PI / 4 * a);
+    turn = side * (0.34 + (Math.PI / 2 - 0.34) * a); up = 1 - a;
+  }
+  const k = Math.sin(Math.PI * u);
   return {
-    turn, sy: 1 - 0.07 * up - jolt,
-    shield: { sweep: SHIELD_REST.sweep + (goal - SHIELD_REST.sweep) * up,
-      y: SHIELD_REST.y + (SHIELD_GUARD.y - SHIELD_REST.y) * up, r: SHIELD_REST.r + (SHIELD_GUARD.r - SHIELD_REST.r) * up,
-      tilt: -0.18 * up },
-    // the sword drops back and out of the way while the shield is up
-    sword: { sweep: -side * 0.5 * up, lean: -0.35 * up }
+    turn, parrying, sy: 1 - 0.06 * up,
+    shield: { sweep: world - turn, y: SHIELD_REST.y + (SHIELD_GUARD.y - SHIELD_REST.y) * up,
+      r: SHIELD_REST.r + (SHIELD_GUARD.r - SHIELD_REST.r) * up, tilt: -0.2 * up },
+    sword: { sweep: -side * 0.45 * k, lean: -0.35 * k }   // the sword drops back out of the shield's way
   };
 }
 
@@ -280,7 +294,10 @@ function enemySwingPose(t, side) {
     const r = 1 - ease((u - 0.55) / 0.45);
     s.turn = side * (Math.PI / 2) * r;
   }
-  if (t < ENEMY_WINDUP) s.lean += 0.05 * Math.sin(t * 40) * (t / ENEMY_WINDUP);   // the blade trembles as it draws back
+  if (t < ENEMY_WINDUP) {            // the tell: the blade trembles as it draws back, and the body coils lower
+    const w = t / ENEMY_WINDUP;
+    s.lean += 0.12 * Math.sin(t * 45) * w; s.sy -= 0.06 * w;
+  }
   return s;
 }
 const phiOf = dir => Math.atan2(-dir[0], -dir[1]);   // facing angle for a square direction
@@ -291,8 +308,8 @@ const state = {
   sq: [0, 0],        // pawn square, absolute (x, z) indices
   origin: [0, 0],    // render origin square; kept near the pawn so coordinates stay small
   phi: 0,            // facing: the pawn looks along facingVec(phi); quarter turns only
-  act: null,         // { kind: 'hop' | 'dash', dir, t0 } or { kind: 'swing' | 'block', side, t0 }
-  orbit: 0, pitch: CAM.pitch, dist: CAM.dist, yaw: CAM.yaw,
+  act: null,         // { kind: 'hop' | 'dash', dir, t0 } or { kind: 'swing' | 'parry', side, t0 }
+  orbit: 0, pitch: CAM.pitch, dist: CAM.dist, yaw: CAM.yaw, zoomOut: false, camDist: CAM.dist,
   target: [0, 0.6, 0],
   taken: 0,
   nextSpawn: 1.5,
@@ -391,7 +408,7 @@ function step(now) {
     if (u >= 1 || chain) {
       if (a.kind === 'hop') { state.sq[0] += a.dir[0]; state.sq[1] += a.dir[1]; }
       else if (a.kind === 'dash') { state.sq[0] += DASH_SQUARES * a.dir[0]; state.sq[1] += DASH_SQUARES * a.dir[1]; }
-      else if (a.kind === 'swing' || (a.kind === 'block' && BLOCK_TURNS)) state.phi += a.side * Math.PI / 2;
+      else if (a.kind === 'swing' || (a.kind === 'parry' && PARRY_TURNS)) state.phi += a.side * Math.PI / 2;
       state.act = null;
     }
   }
@@ -423,14 +440,14 @@ function step(now) {
   }
 }
 
-const DURATION = { hop: HOP, dash: DASH, swing: SWING, block: BLOCK };
+const DURATION = { hop: HOP, dash: DASH, swing: SWING, parry: PARRY };
 const toRender = sq => [(sq[0] - state.origin[0]) * SQ, (sq[1] - state.origin[1]) * SQ];
 
 // Player pose, including where the sword is
 function pose(now) {
   let [x, z] = toRender(state.sq);
   let y = 0, phi = state.phi, A = rotY(phi);
-  let sweep = 0, lean = 0, reach = 0, slashing = false, u = 0, side = 0;
+  let sweep = 0, lean = 0, reach = 0, slashing = false, parrying = false, u = 0, side = 0;
   let sh = { ...SHIELD_REST, tilt: 0 };
   const a = state.act;
   if (a?.kind === 'hop' || a?.kind === 'dash') {
@@ -446,15 +463,16 @@ function pose(now) {
     phi += s.turn;
     A = K.M.mul(scaleY(s.sy), rotY(phi));
     ({ sweep, lean, reach, slashing } = s);
-    // tuck the shield round behind the left side so the blade's arc clears it
-    const tuck = Math.sin(Math.PI * Math.min(1, u * 1.15));
-    sh.sweep += 0.9 * tuck; sh.r -= 0.04 * tuck;
-  } else if (a?.kind === 'block') {
-    u = Math.min(1, (now - a.t0) / BLOCK); side = a.side;
-    const b = blockPose(u, a.side);
+    // tuck the shield round to the side the swing ends on, out of the blade's arc, then bring it back in front
+    const tuck = u < 0.2 ? ease(u / 0.2) : u < 0.75 ? 1 : 1 - ease((u - 0.75) / 0.25);
+    sh.sweep += (side * SHIELD_TUCK.sweep - sh.sweep) * tuck;
+    sh.y += (SHIELD_TUCK.y - sh.y) * tuck; sh.r += (SHIELD_TUCK.r - sh.r) * tuck;
+  } else if (a?.kind === 'parry') {
+    u = Math.min(1, (now - a.t0) / PARRY); side = a.side;
+    const b = parryPose(u, a.side);
     phi += b.turn;
     A = K.M.mul(scaleY(b.sy), rotY(phi));
-    sh = b.shield; sweep = b.sword.sweep; lean = b.sword.lean;
+    sh = b.shield; sweep = b.sword.sweep; lean = b.sword.lean; parrying = b.parrying;
   }
   const hurt = now - state.hurtAt;   // flinch when hit: a sharp squash that rings out
   if (hurt >= 0 && hurt < 0.45) A = K.M.mul(scaleY(1 - 0.16 * Math.exp(-7 * hurt) * Math.cos(hurt * 28)), A);
@@ -464,7 +482,7 @@ function pose(now) {
   // Shield: carried round the pawn's axis, its face pointing outward along `sweep`
   const shieldAt = mv(rotY(sh.sweep), [0, sh.y, -sh.r]);
   const shieldA = K.M.mul(rotY(sh.sweep), K.M.rot([1, 0, 0], sh.tilt));
-  return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, u, side, now };
+  return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, parrying, u, side, now };
 }
 
 // World-space point t along the blade, for a pose (the player's or an enemy's)
@@ -491,9 +509,11 @@ function enemyPose(e, now) {
       A = K.M.mul(scaleY(s.sy), rotY(phi0 + s.turn));
       ({ sweep, lean, reach } = s);
       slashing = s.slashing && !e.blocked;
-      if (e.blocked) {               // knocked back off the shield: the blade springs up and away
-        const k = Math.min(1, (now - e.blockedAt) / 0.25);
-        lean *= 1 - 0.6 * Math.sin(Math.PI * k);
+      if (e.blocked) {               // parried: the blade springs up and away and the body staggers back
+        const k = Math.min(1, (now - e.blockedAt) / 0.45), jolt = Math.sin(Math.PI * k);
+        lean *= 1 - 0.7 * jolt;
+        A = K.M.mul(K.M.rot([e.dir[1], 0, -e.dir[0]], 0.4 * jolt), A);
+        x -= e.dir[0] * 0.18 * jolt; z -= e.dir[1] * 0.18 * jolt;
       }
     }
   }
@@ -542,7 +562,7 @@ function checkEnemyHits(prevNow, now, stage, rig) {
       const ep = enemyPose(e, tm);
       if (!ep.slashing) continue;
       const p = pose(tm), pts = BLADE_TS.map(t => [t, bladePoint(ep, t)]);
-      if (pts.some(([, b]) => touchesShield(p, b))) { e.blocked = true; e.blockedAt = tm; flash('Blocked'); break; }
+      if ((p.parrying || PASSIVE_BLOCK) && pts.some(([, b]) => touchesShield(p, b))) { e.blocked = true; e.blockedAt = tm; flash('Parried'); break; }
       const hit = pts.find(([, b]) => touchesPawn(p, b));
       if (!hit) continue;
       e.struck = true;
@@ -628,37 +648,64 @@ document.getElementById('restart').addEventListener('click', restart);
 
 // ---------- input ----------
 
-const press = (kind, side = 0) => { queued = { kind, side }; };
-// PLACEHOLDER bindings for the new moves: Space / Shift dash, Z / C block left / right
-const KEYS = {
-  KeyA: ['swing', 1], ArrowLeft: ['swing', 1], KeyQ: ['swing', 1],
-  KeyD: ['swing', -1], ArrowRight: ['swing', -1], KeyE: ['swing', -1],
-  Space: ['dash'], ShiftLeft: ['dash'], ShiftRight: ['dash'],
-  KeyZ: ['block', 1], KeyC: ['block', -1]
-};
-addEventListener('keydown', e => {
-  if (e.code === 'KeyW' || e.code === 'ArrowUp') { held.add(e.code); e.preventDefault(); return; }
-  if (e.code === 'KeyR' && !e.repeat) { restart(); return; }
-  if (e.repeat || !KEYS[e.code]) return;
-  press(...KEYS[e.code]); e.preventDefault();
-});
-addEventListener('keyup', e => held.delete(e.code));
-addEventListener('blur', () => held.clear());
+// Any control brings the camera back from the zoomed-out view
+const press = (kind, side = 0) => { state.zoomOut = false; queued = { kind, side }; };
+const zoomOut = () => { state.zoomOut = true; };
 
-const fwd = document.getElementById('pad-up');
-fwd.addEventListener('pointerdown', e => {
+// Keyboard. Hold S or Shift to turn A / D into parries (Q / E parry directly); Space or Shift + W dashes.
+const mods = new Set();
+addEventListener('keydown', e => {
+  if (e.code === 'KeyR' && !e.repeat) { restart(); return; }
+  if (e.code === 'KeyS' || e.code === 'ArrowDown') { mods.add(e.code); e.preventDefault(); return; }
+  if (e.repeat && !['KeyW', 'ArrowUp'].includes(e.code)) return;
+  const guard = e.shiftKey || mods.size > 0;
+  const act = {
+    KeyW: e.shiftKey ? ['dash'] : ['hop'], ArrowUp: e.shiftKey ? ['dash'] : ['hop'], Space: ['dash'],
+    KeyA: [guard ? 'parry' : 'swing', 1], ArrowLeft: [guard ? 'parry' : 'swing', 1],
+    KeyD: [guard ? 'parry' : 'swing', -1], ArrowRight: [guard ? 'parry' : 'swing', -1],
+    KeyQ: ['parry', 1], KeyE: ['parry', -1], KeyZ: ['zoom']
+  }[e.code];
+  if (!act || (e.repeat && act[0] !== 'hop')) return;
   e.preventDefault();
-  fwd.setPointerCapture?.(e.pointerId);
-  if (!state.act) queued = { kind: 'hop' };
-  held.add('pad');
+  if (act[0] === 'zoom') return zoomOut();
+  if (act[0] === 'hop') { state.zoomOut = false; held.add(e.code); return; }   // held: keep hopping
+  press(...act);
 });
-for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) fwd.addEventListener(ev, () => held.delete('pad'));
-for (const btn of document.querySelectorAll('[data-move]'))
-  btn.addEventListener('pointerdown', e => { e.preventDefault(); press(btn.dataset.move, Number(btn.dataset.side || 0)); });
+addEventListener('keyup', e => { held.delete(e.code); mods.delete(e.code); });
+addEventListener('blur', () => { held.clear(); mods.clear(); });
+
+// Touch: swipes on the board. Up hops (a long swipe dashes), left / right swings (or parries while the Shield
+// button is held), down zooms out until the next control.
+const SWIPE_MIN = 24;                                       // px: shorter is a tap, ignored
+const swipeLong = () => Math.max(90, 0.2 * innerHeight);    // PLACEHOLDER: px past which a swipe up is a dash
+const shieldBtn = document.getElementById('shield');
+let shieldHeld = false;
+shieldBtn.addEventListener('pointerdown', e => { e.preventDefault(); shieldHeld = true; shieldBtn.setPointerCapture?.(e.pointerId); shieldBtn.classList.add('on'); });
+for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture'])
+  shieldBtn.addEventListener(ev, () => { shieldHeld = false; shieldBtn.classList.remove('on'); });
+const swipes = new Map();
+function swipe(dx, dy) {
+  const len = Math.hypot(dx, dy);
+  if (len < SWIPE_MIN) return;
+  if (Math.abs(dy) >= Math.abs(dx)) {
+    if (dy < 0) press(-dy >= swipeLong() ? 'dash' : 'hop');
+    else zoomOut();
+  } else press(shieldHeld ? 'parry' : 'swing', dx < 0 ? 1 : -1);
+}
+window.__swipe = swipe; // for tests
 
 // Drag on the board to orbit the camera around the pawn; it stays where you leave it
 let drag = null;
-canvas.addEventListener('pointerdown', e => { drag = { x: e.clientX, y: e.clientY, orbit: state.orbit, pitch: state.pitch }; canvas.setPointerCapture(e.pointerId); });
+canvas.addEventListener('pointerdown', e => {
+  canvas.setPointerCapture(e.pointerId);
+  if (e.pointerType === 'mouse') drag = { x: e.clientX, y: e.clientY, orbit: state.orbit, pitch: state.pitch };
+  else swipes.set(e.pointerId, { x: e.clientX, y: e.clientY });
+});
+canvas.addEventListener('pointerup', e => {
+  const s = swipes.get(e.pointerId);
+  if (s) { swipes.delete(e.pointerId); swipe(e.clientX - s.x, e.clientY - s.y); }
+});
+canvas.addEventListener('pointercancel', e => swipes.delete(e.pointerId));
 canvas.addEventListener('pointermove', e => {
   if (!drag) return;
   const k = 4 / Math.max(innerWidth, 1);
@@ -792,13 +839,15 @@ function start() {
     const [fx, fz] = facingVec(p.phi);
     const goal = [p.x + fx * 0.6, 0.6, p.z + fz * 0.6];
     const follow = 1 - Math.exp(-dt * 4);
+    const goalDist = state.zoomOut ? Math.min(13.5, state.dist * ZOOM_OUT) : state.dist;
+    state.camDist += (goalDist - state.camDist) * (1 - Math.exp(-dt * 5));
     for (const i of [0, 1, 2]) state.target[i] += (goal[i] - state.target[i]) * follow;
 
     world.anim.update(dt, now);
     const { width, height } = artSize();
     renderer.render(world, {
       width, height, time: now, instances: board, changedRows: allRows,
-      camera: { target: state.target, dist: state.dist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch, projection: CAM.projection }
+      camera: { target: state.target, dist: state.camDist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch, projection: CAM.projection }
     });
     coords.textContent = `${state.sq[0]}, ${-state.sq[1]}`;
     requestAnimationFrame(frame);
