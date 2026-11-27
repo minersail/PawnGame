@@ -67,6 +67,8 @@
     font: 400 13px var(--font-display); letter-spacing: 0.04em; touch-action: none; cursor: pointer;
   }
   .controls .hop { min-width: 88px; height: 76px; font-size: 22px; }
+  .controls .stack { display: flex; flex-direction: column; gap: 10px; }
+  .controls .stack button:first-child { height: 48px; }
   .controls button:active { background: var(--slate-hi); }
   .controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   @media (pointer: coarse) {
@@ -77,13 +79,15 @@
 </head>
 <body>
 
-<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; A and D swing the sword."></canvas>
+<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; A and D swing the sword; Space dashes; Z and C block."></canvas>
 
 <div class="hud top">
   <h1>Endless Board</h1>
   <div class="keys">
     <div><kbd>W</kbd> or <kbd>↑</kbd>: hop forward (hold to keep going)</div>
     <div><kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd>: swing left / right</div>
+    <div><kbd>Space</kbd> or <kbd>Shift</kbd>: dash two squares</div>
+    <div><kbd>Z</kbd> <kbd>C</kbd>: block left / right</div>
     <div>Drag: orbit · double-click: reset · scroll: zoom</div>
   </div>
 </div>
@@ -97,9 +101,18 @@
 <div id="status">Baking splats…</div>
 
 <div class="controls">
-  <button type="button" id="swing-left" data-swing="1" aria-label="Swing left">◀ Swing</button>
-  <button type="button" id="pad-up" class="hop" aria-label="Hop forward">↑</button>
-  <button type="button" id="swing-right" data-swing="-1" aria-label="Swing right">Swing ▶</button>
+  <div class="stack">
+    <button type="button" id="block-left" data-move="block" data-side="1" aria-label="Block left">◀ Block</button>
+    <button type="button" id="swing-left" data-move="swing" data-side="1" aria-label="Swing left">◀ Swing</button>
+  </div>
+  <div class="stack">
+    <button type="button" id="dash" data-move="dash" aria-label="Dash two squares forward">Dash ⇈</button>
+    <button type="button" id="pad-up" class="hop" aria-label="Hop forward">↑</button>
+  </div>
+  <div class="stack">
+    <button type="button" id="block-right" data-move="block" data-side="-1" aria-label="Block right">Block ▶</button>
+    <button type="button" id="swing-right" data-move="swing" data-side="-1" aria-label="Swing right">Swing ▶</button>
+  </div>
 </div>
 
 <script src="ink/dist/ink-studio.bake.js"></script>

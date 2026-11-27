@@ -10,10 +10,20 @@ const params = new URLSearchParams(location.search);
 const PALETTE = [0x0b0d14, 0x3a2f2a, 0x7a634f, 0xb89c7c, 0xe2cfae, 0xfff4dc,
   0x1c2230, 0x2a3448, 0x3a4862, 0x4d5d7c, 0x6a7da0, 0x8a9cc0,
   0x120d0e, 0x241a1a, 0x3b2c29, 0x5a4540, 0x7e655b];
+const num = (name, fallback) => Number(params.get(name)) || fallback;   // ?name=value overrides, for feel testing
 const SQ = 1.3;          // square size, as in hop.js
-const WINDOW = Number(params.get('w')) || 14; // squares kept around the pawn (even)
-const HOP = 1.0;         // seconds per hop, as in hop.js
-const SWING = 0.7;       // seconds per swing
+const WINDOW = num('w', 14); // squares kept around the pawn (even)
+const HOP = num('hop', 1.0);       // seconds per hop, as in hop.js
+const SWING = num('swing', 0.7);   // seconds per swing
+// Dash and shield. Every value marked PLACEHOLDER is a stand-in until the design decides it.
+const DASH = num('dash', 0.45);    // seconds per dash
+const DASH_SQUARES = 2;            // a dash covers two squares, like a pawn's opening move
+const DASH_BLOCKED = 'cancel';     // PLACEHOLDER: an enemy on either square cancels the dash (it does not stop short)
+const BLOCK = num('block', 0.6);   // PLACEHOLDER: a block is a fixed-length move, not held
+const BLOCK_TURNS = false;         // PLACEHOLDER: blocking does not change the pawn's facing
+const SHIELD_REST = { sweep: 1.45, y: 0.5, r: 0.34 };   // off hand at rest: on the pawn's left side
+const SHIELD_GUARD = { y: 0.78, r: 0.5 };                // raised to guard a front diagonal
+const SHIELD_BAKE = [-24, 0.6, 40];                      // baked away from the pawn so it picks up no baked shadow
 const CHAIN_AT = 0.9;    // a held key starts the next hop once the landing has mostly settled
 const ART_HEIGHT = 168;  // art pixels down the screen
 const HAND = [0.1, 0.55, -0.32];   // sword grip at rest: in front of the pawn (pawn faces -z), blade straight up
@@ -104,6 +114,11 @@ function bakeWorld() {
   S.ball([hx, hy - 0.12, hz], 0.042, { r: [2, 3, 4] }, { res: 0.018, tag: 'sword' });                 // pommel
   S.bake();
 
+  // Round shield for the off hand: a thin ellipsoid facing -z with a boss, baked on its own; the rig carries it
+  S.ball(SHIELD_BAKE, [0.2, 0.24, 0.032], { r: [2, 3, 4] }, { res: 0.018, tag: 'shield' });
+  S.ball(add(SHIELD_BAKE, [0, 0, -0.03]), 0.055, { r: [3, 4, 5] }, { res: 0.016, tag: 'shield' });
+  S.bake();
+
   // Enemy pool: identical dark pawns, all baked at the origin and placed by the rig
   for (let i = 0; i < ENEMIES; i++) { sculptPawn(S, ebony, `e${i}`, false, EREST(i)); S.bake(); }
   for (let i = 0; i < ENEMIES; i++) rig.part(`e${i}cut`);   // the half a sword hit slices off, filled in on a hit
@@ -114,7 +129,7 @@ function bakeWorld() {
   });
   // Fade distant squares into the background so the board's edge is never seen.
   world.fog = { c: 0, start: 0.42, max: 1 };
-  const sun = { dir: S.sun, amb: S.amb, sky: S.sky, k: S.sunK, parts: ['pawn', 'sword'], keep: Infinity };
+  const sun = { dir: S.sun, amb: S.amb, sky: S.sky, k: S.sunK, parts: ['pawn', 'sword', 'shield'], keep: Infinity };
   return { world, rig, capture, sun };
 }
 
@@ -172,13 +187,52 @@ function swingPose(u, side) {
   return { sweep, lean, turn, sy, reach, slashing };
 }
 
+// One dash with u in [0, 1]: a short crouch, a fast low skim over two squares with a hard forward lean, a braking skid.
+// `along` runs 0..1 over the whole dash distance.
+function dashPose(u) {
+  let along = 0, y = 0, sy = 1, tilt = 0;
+  if (u < 0.15) {                    // coil
+    const a = u / 0.15;
+    sy = 1 - 0.16 * Math.sin(a * Math.PI / 2); tilt = 0.1 * a;   // (positive tilt leans back, as in hopPose)
+  } else if (u < 0.72) {             // skim: low and fast, leaning into it
+    const a = (u - 0.15) / 0.57;
+    along = 1 - Math.pow(1 - a, 2.2);
+    y = 0.16 * Math.sin(Math.PI * a);
+    sy = 0.86 + 0.1 * Math.sin(Math.PI * a);
+    tilt = 0.1 * (1 - a) - 0.42 * Math.sin(Math.PI * Math.min(1, a * 1.25));
+  } else {                           // brake: the lean snaps back past upright, then settles
+    const a = (u - 0.72) / 0.28;
+    along = 1;
+    sy = 1 - 0.18 * Math.exp(-5 * a) * Math.cos(a * 9);
+    tilt = 0.28 * Math.sin(Math.PI * Math.min(1, a * 1.5)) * Math.exp(-2 * a);
+  }
+  return { along, y, sy, tilt };
+}
+
+// One block with u in [0, 1]; side +1 guards the front-left diagonal, -1 the front-right.
+// The shield comes up and out to that diagonal, holds, and drops back to the pawn's side.
+function blockPose(u, side) {
+  const up = u < 0.25 ? easeOut(u / 0.25) : u < 0.7 ? 1 : 1 - ease((u - 0.7) / 0.3);
+  const turn = side * 0.22 * up;                                  // the body twists a little toward the guard
+  const goal = side * Math.PI / 4 - turn;                         // shield sweep, relative to the body
+  const jolt = u > 0.2 && u < 0.45 ? 0.04 * Math.sin(Math.PI * (u - 0.2) / 0.25) : 0;   // braces as it lands
+  return {
+    turn, sy: 1 - 0.07 * up - jolt,
+    shield: { sweep: SHIELD_REST.sweep + (goal - SHIELD_REST.sweep) * up,
+      y: SHIELD_REST.y + (SHIELD_GUARD.y - SHIELD_REST.y) * up, r: SHIELD_REST.r + (SHIELD_GUARD.r - SHIELD_REST.r) * up,
+      tilt: -0.18 * up },
+    // the sword drops back and out of the way while the shield is up
+    sword: { sweep: -side * 0.5 * up, lean: -0.35 * up }
+  };
+}
+
 // ---------- game state ----------
 
 const state = {
   sq: [0, 0],        // pawn square, absolute (x, z) indices
   origin: [0, 0],    // render origin square; kept near the pawn so coordinates stay small
   phi: 0,            // facing: the pawn looks along facingVec(phi); quarter turns only
-  act: null,         // { kind: 'hop', dir, t0 } or { kind: 'swing', side, t0 }
+  act: null,         // { kind: 'hop' | 'dash', dir, t0 } or { kind: 'swing' | 'block', side, t0 }
   orbit: 0, pitch: 0.38, dist: 7.5, yaw: 0.5,
   target: [0, 0.6, 0],
   taken: 0,
@@ -186,7 +240,7 @@ const state = {
 };
 window.__endless = state; // for tests
 const held = new Set();   // sources holding "forward"
-let queued = null;         // a swing (+1 / -1) or 'hop' waiting for the current action to finish
+let queued = null;         // { kind, side } waiting for the current action to finish
 
 // Enemies: { i, mode: 'off' | 'drop' | 'idle' | 'hop' | 'dying', sq, dir, t0, wait, cut }
 const enemies = Array.from({ length: ENEMIES }, (_, i) => ({ i, mode: 'off', sq: [0, 0], dir: [0, -1], t0: 0, wait: 0, dirty: true }));
@@ -196,6 +250,8 @@ const sqKey = (x, z) => x + ',' + z;
 function occupied() {
   const o = new Set([sqKey(...state.sq)]);
   if (state.act?.kind === 'hop') o.add(sqKey(state.sq[0] + state.act.dir[0], state.sq[1] + state.act.dir[1]));
+  if (state.act?.kind === 'dash')
+    for (let k = 1; k <= DASH_SQUARES; k++) o.add(sqKey(state.sq[0] + k * state.act.dir[0], state.sq[1] + k * state.act.dir[1]));
   for (const e of enemies) {
     if (e.mode === 'off' || e.mode === 'dying') continue;
     o.add(sqKey(...e.sq));
@@ -244,23 +300,27 @@ function stepEnemies(now) {
 function step(now) {
   const a = state.act;
   if (a) {
-    const u = (now - a.t0) / (a.kind === 'hop' ? HOP : SWING);
+    const u = (now - a.t0) / DURATION[a.kind];
     const chain = a.kind === 'hop' && u >= CHAIN_AT && (held.size || queued);
     if (u >= 1 || chain) {
       if (a.kind === 'hop') { state.sq[0] += a.dir[0]; state.sq[1] += a.dir[1]; }
-      else state.phi += a.side * Math.PI / 2;
+      else if (a.kind === 'dash') { state.sq[0] += DASH_SQUARES * a.dir[0]; state.sq[1] += DASH_SQUARES * a.dir[1]; }
+      else if (a.kind === 'swing' || (a.kind === 'block' && BLOCK_TURNS)) state.phi += a.side * Math.PI / 2;
       state.act = null;
     }
   }
   if (!state.act) {
-    const next = queued ?? (held.size ? 'hop' : null);
+    const next = queued ?? (held.size ? { kind: 'hop' } : null);
     queued = null;
-    if (next === 'hop') {
+    if (next?.kind === 'hop' || next?.kind === 'dash') {
       const [fx, fz] = facingVec(state.phi), dir = [Math.round(fx), Math.round(fz)];
-      // An enemy on the square ahead blocks the hop
-      const blocked = enemies.some(e => (e.mode === 'idle' || e.mode === 'drop') && e.sq[0] === state.sq[0] + dir[0] && e.sq[1] === state.sq[1] + dir[1]);
-      if (!blocked) state.act = { kind: 'hop', dir, t0: now };
-    } else if (next) state.act = { kind: 'swing', side: next, t0: now };
+      // An enemy standing on a square the move passes through blocks it
+      const n = next.kind === 'dash' ? DASH_SQUARES : 1;
+      const stands = k => enemies.some(e => (e.mode === 'idle' || e.mode === 'drop') && e.sq[0] === state.sq[0] + k * dir[0] && e.sq[1] === state.sq[1] + k * dir[1]);
+      let blocked = false;
+      for (let k = 1; k <= n; k++) blocked ||= stands(k);
+      if (!blocked) state.act = { kind: next.kind, dir, t0: now };
+    } else if (next) state.act = { kind: next.kind, side: next.side, t0: now };
   }
   stepEnemies(now);
   // Rebase so render coordinates stay small however far the pawn walks.
@@ -276,6 +336,7 @@ function step(now) {
   }
 }
 
+const DURATION = { hop: HOP, dash: DASH, swing: SWING, block: BLOCK };
 const toRender = sq => [(sq[0] - state.origin[0]) * SQ, (sq[1] - state.origin[1]) * SQ];
 
 // Player pose, including where the sword is
@@ -283,22 +344,38 @@ function pose(now) {
   let [x, z] = toRender(state.sq);
   let y = 0, phi = state.phi, A = rotY(phi);
   let sweep = 0, lean = 0, reach = 0, slashing = false, u = 0, side = 0;
+  let sh = { ...SHIELD_REST, tilt: 0 };
   const a = state.act;
-  if (a?.kind === 'hop') {
-    const h = hopPose(Math.min(1, (now - a.t0) / HOP));
-    x += a.dir[0] * SQ * h.along; z += a.dir[1] * SQ * h.along; y = h.y;
+  if (a?.kind === 'hop' || a?.kind === 'dash') {
+    const dash = a.kind === 'dash';
+    const h = (dash ? dashPose : hopPose)(Math.min(1, (now - a.t0) / DURATION[a.kind]));
+    const d = (dash ? DASH_SQUARES : 1) * SQ * h.along;
+    x += a.dir[0] * d; z += a.dir[1] * d; y = h.y;
     A = K.M.mul(hopMatrix(h, a.dir), rotY(phi));
+    if (dash) { lean = -0.5 * Math.min(1, Math.max(0, -h.tilt / 0.4)); sh.r += 0.04; }   // sword and shield swept back by the rush
   } else if (a?.kind === 'swing') {
     u = Math.min(1, (now - a.t0) / SWING); side = a.side;
     const s = swingPose(u, a.side);
     phi += s.turn;
     A = K.M.mul(scaleY(s.sy), rotY(phi));
     ({ sweep, lean, reach, slashing } = s);
+    // tuck the shield round behind the left side so the blade's arc clears it
+    const tuck = Math.sin(Math.PI * Math.min(1, u * 1.15));
+    sh.sweep += 0.9 * tuck; sh.r -= 0.04 * tuck;
+  } else if (a?.kind === 'block') {
+    u = Math.min(1, (now - a.t0) / BLOCK); side = a.side;
+    const b = blockPose(u, a.side);
+    phi += b.turn;
+    A = K.M.mul(scaleY(b.sy), rotY(phi));
+    sh = b.shield; sweep = b.sword.sweep; lean = b.sword.lean;
   }
   // Sword: carried round the pawn's axis by `sweep`, tilted outward by `lean`, held further out by `reach`
   const grip = mv(rotY(sweep), [HAND[0], HAND[1], HAND[2] - reach]);
   const swordA = K.M.mul(rotY(sweep), K.M.rot([1, 0, 0], -lean));
-  return { x, y, z, A, phi, grip, swordA, slashing, u, side };
+  // Shield: carried round the pawn's axis, its face pointing outward along `sweep`
+  const shieldAt = mv(rotY(sh.sweep), [0, sh.y, -sh.r]);
+  const shieldA = K.M.mul(rotY(sh.sweep), K.M.rot([1, 0, 0], sh.tilt));
+  return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, u, side };
 }
 
 // World-space point t along the blade, for a pose
@@ -392,12 +469,18 @@ function dyingPoses(e, now) {
 
 // ---------- input ----------
 
-const press = side => { queued = side; };
+const press = (kind, side = 0) => { queued = { kind, side }; };
+// PLACEHOLDER bindings for the new moves: Space / Shift dash, Z / C block left / right
+const KEYS = {
+  KeyA: ['swing', 1], ArrowLeft: ['swing', 1], KeyQ: ['swing', 1],
+  KeyD: ['swing', -1], ArrowRight: ['swing', -1], KeyE: ['swing', -1],
+  Space: ['dash'], ShiftLeft: ['dash'], ShiftRight: ['dash'],
+  KeyZ: ['block', 1], KeyC: ['block', -1]
+};
 addEventListener('keydown', e => {
   if (e.code === 'KeyW' || e.code === 'ArrowUp') { held.add(e.code); e.preventDefault(); return; }
-  if (e.repeat) return;
-  if (['KeyA', 'ArrowLeft', 'KeyQ'].includes(e.code)) { press(1); e.preventDefault(); }
-  if (['KeyD', 'ArrowRight', 'KeyE'].includes(e.code)) { press(-1); e.preventDefault(); }
+  if (e.repeat || !KEYS[e.code]) return;
+  press(...KEYS[e.code]); e.preventDefault();
 });
 addEventListener('keyup', e => held.delete(e.code));
 addEventListener('blur', () => held.clear());
@@ -406,12 +489,12 @@ const fwd = document.getElementById('pad-up');
 fwd.addEventListener('pointerdown', e => {
   e.preventDefault();
   fwd.setPointerCapture?.(e.pointerId);
-  if (!state.act) queued = 'hop';
+  if (!state.act) queued = { kind: 'hop' };
   held.add('pad');
 });
 for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture']) fwd.addEventListener(ev, () => held.delete('pad'));
-for (const btn of document.querySelectorAll('[data-swing]'))
-  btn.addEventListener('pointerdown', e => { e.preventDefault(); press(Number(btn.dataset.swing)); });
+for (const btn of document.querySelectorAll('[data-move]'))
+  btn.addEventListener('pointerdown', e => { e.preventDefault(); press(btn.dataset.move, Number(btn.dataset.side || 0)); });
 
 // Drag on the board to orbit the camera around the pawn; it stays where you leave it
 let drag = null;
@@ -463,6 +546,7 @@ function start() {
     pre() {
       rig.set('pawn', p.A, [0, 0, 0], [p.x, p.y, p.z]);
       rig.child('sword', 'pawn', p.swordA, HAND, p.grip);
+      rig.child('shield', 'pawn', p.shieldA, SHIELD_BAKE, p.shieldAt);
       const sh = 1 - 0.45 * Math.min(1, p.y / 0.8);
       rig.set('shadow', [sh, 0, 0, 0, 1, 0, 0, 0, sh], [0, 0, 0], [p.x, 0, p.z]);
       for (const e of enemies) {
