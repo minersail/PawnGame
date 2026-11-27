@@ -76,7 +76,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 
 - **Shared copies.** `createSplatInstances` shares the two baked squares across a 14×14 patch of copies centred on the pawn. A copy that falls off one side of the patch moves to the other.
 - **Colours stay right.** The patch is even-sized, so a moved square keeps its colour.
-- **Hidden edge.** Fog fades the patch edge into the background.
+- **Hidden edge.** The isometric view never reaches the patch edge. With `?cam=persp`, fog fades it into the background. Fog is off in the isometric view because, under an orthographic camera, it formed horizontal dither bands that looked like board seams.
 - **Precision.** Render coordinates are rebased by an even number of squares whenever the pawn is more than 32 squares from the origin, so they stay small however far it walks.
 
 ### Animation

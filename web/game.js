@@ -168,8 +168,10 @@ function bakeWorld() {
     cam: { target: [0, 0.6, 0], dist: CAM.dist, pitch: CAM.pitch, yaw: CAM.yaw, projection: CAM.projection },
     detail: 14, dither: 0.2, radius: 11
   });
-  // Fade distant squares into the background so the board's edge is never seen.
-  world.fog = { c: 0, start: 0.42, max: 1 };
+  // Fade distant squares into the background so the board's edge is never seen. Perspective only: with the
+  // orthographic camera fog depth varies only with screen height, so each palette step became a horizontal dither
+  // band that read as board seams; the iso view never reaches the patch edge (about ±7.3 of 9.1 at full zoom-out).
+  if (PERSP) world.fog = { c: 0, start: 0.42, max: 1 };
   const sun = { dir: S.sun, amb: S.amb, sky: S.sky, k: S.sunK, parts: ['pawn', 'sword', 'shield'], keep: Infinity };
   return { world, rig, capture, sun };
 }
