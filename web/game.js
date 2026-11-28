@@ -42,7 +42,8 @@ const SHIELD_GUARD = { y: 0.74, r: 0.52 };               // raised and pushed ou
 const SHIELD_TUCK = { sweep: 1.7, y: 0.5, r: 0.34 };     // out of the blade's way during a swing (sweep is x side)
 const ZOOM_OUT = 1.6;              // zoom-out button / Z: the camera pulls back this much until the next control
 const SHIELD_BAKE = [-24, 0.6, 40];                      // baked away from the pawn so it picks up no baked shadow
-const SHIELD_R = [0.2, 0.24, 0.032];                     // shield ellipsoid radii (faces -z when baked)
+const SHIELD_SCALE = num('shield', 1.5);                // shield size: 1.5× the original heater (2026-11-28), drawn and for contact
+const SHIELD_R = [0.2 * SHIELD_SCALE, 0.24 * SHIELD_SCALE, 0.032];   // shield ellipsoid radii for contact (faces -z when baked)
 // Enemy attacks and health. PLACEHOLDER values wait on design.
 const PLAYER_HP = num('hp', 3);          // PLACEHOLDER: hit points
 const ENEMY_WINDUP = num('windup', 0.5); // PLACEHOLDER: an enemy's wind-up, the tell (the player's is 0.175 s)
@@ -197,8 +198,8 @@ function bakeWorld() {
 
   // Heater shield for the off hand: flat top, straight upper sides curving to a point, facing -z, baked on its own;
   // a raised inner panel in a lighter ramp leaves a darker rim round the edge. The rig carries it.
-  S.extrude([heaterOutline(1)], SHIELD_BAKE, 0.04, { r: [2, 3, 4] }, { rd: 0.01, res: 0.016, tag: 'shield' });
-  S.extrude([heaterOutline(0.78)], add(SHIELD_BAKE, [0, 0.008, -0.016]), 0.024, { r: [3, 4, 5] }, { rd: 0.006, res: 0.014, tag: 'shield' });
+  S.extrude([heaterOutline(SHIELD_SCALE)], SHIELD_BAKE, 0.04, { r: [2, 3, 4] }, { rd: 0.01, res: 0.016, tag: 'shield' });
+  S.extrude([heaterOutline(0.78 * SHIELD_SCALE)], add(SHIELD_BAKE, [0, 0.008 * SHIELD_SCALE, -0.016]), 0.024, { r: [3, 4, 5] }, { rd: 0.006, res: 0.014, tag: 'shield' });
   S.bake();
 
   // Enemy pool: identical dark pawns, all baked at the origin and placed by the rig
