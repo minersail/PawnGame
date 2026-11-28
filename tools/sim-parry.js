@@ -13,11 +13,15 @@ vm.runInContext(`var KIT = { M: {
   mul(A, B) { const o = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) o.push(A[i*3]*B[j] + A[i*3+1]*B[3+j] + A[i*3+2]*B[6+j]); return o; } } };`, ctx);
 let src = fs.readFileSync(root + '/web/game.js', 'utf8');
 src = src.replace(/^import .*$/mg, '');
+// level-art.js is an ES module: inline it as ART
+const art = fs.readFileSync(root + '/web/level-art.js', 'utf8').replace(/^export /mg, '');
+src = `const ART = (function () { ${art}; return { LEVEL_PALETTE, bruteSDF, TABLE_Y, HAMMER }; })();\n` + src;
 src = src.slice(0, src.indexOf('// ---------- HUD ----------'));
 const el = () => ({ textContent: '', hidden: true, addEventListener() {}, classList: { add() {}, remove() {} } });
 const prelude = `const location = { search: ${JSON.stringify(query)} }; const document = { getElementById: () => (${el.toString()})() };
 const flash = () => {}; const showHp = () => {}; const banner = {}; `;
 vm.runInContext(prelude + src + `
+state.phase = "empty";   // no level: the sims place pieces themselves
 this.simFrames = function (pressAt, side, dt, phase) {
   state.hp = 99; state.hurtAt = -Infinity; state.dead = null; state.phi = 0; state.sq = [0, 0]; state.act = null;
   const e = enemies[0]; Object.assign(e, { mode: 'swing', sq: [0, -1], dir: [0, 1], t0: 0, side: ENEMY_SWING_SIDE, struck: false, blocked: false });

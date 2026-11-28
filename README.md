@@ -1,6 +1,6 @@
 # PawnGame
 
-A small browser game in pixel-art Gaussian splats. The player is an ivory chess pawn with a sword and shield on a chessboard that never ends. Dark pawns drop in from every side and hop toward it. A sword hit cuts them in two along the blade's path.
+A small browser game in pixel-art Gaussian splats. The player is an ivory chess pawn with a sword and shield in a 12×12 chessboard arena. Level 1: seven dark pawns drop in and patrol the board; clear them and the pawn brute, a big pawn with a warhammer, drops in. Beat it to clear the board. A sword hit cuts a piece in two along the blade's path.
 
 Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `main`; the path is case-sensitive).
 
@@ -14,6 +14,7 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 | `scenes/pawn.js` | Offline scene: the static pawn on a small ground patch. |
 | `scenes/hop.js` | Offline scene: the pawn hopping across a 3×4 board. The game's hop curve comes from here. |
 | `renders/` | Offline renders of the two scenes, a turntable, the hop clip (GIF, MP4, APNG, contact sheet) and a six-panel pipeline breakdown. |
+| `web/level-art.js` | Level 1 art from the art thread (sculpt-only): palette extension (indices 21–39), the board frame, tabletop and props, the brute and its warhammer. |
 | `tools/sim-cancel.js` | Runs swing / parry cancels in Node and reports the largest per-frame jump in each pose channel and the final facing. |
 | `tools/sim-parry.js` | Runs the game's pose and contact maths in Node, without rendering, to check parry timing against an enemy swing in seconds. |
 | `tools/vendor-ink.js` | Copies the ink-studio files the page imports into `web/ink/`. |
@@ -81,12 +82,13 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Palette.** The `hop.js` palette (background, five ivory steps, three steps each for the dark and light squares) plus five ebony steps for enemies.
 - **Timing.** The whole bake takes about 0.2 s and produces about 23,600 splats in the main world.
 
-### Endless board
+### The arena and level 1
 
-- **Shared copies.** `createSplatInstances` shares the two baked squares across a 14×14 patch of copies centred on the pawn. A copy that falls off one side of the patch moves to the other.
-- **Colours stay right.** The patch is even-sized, so a moved square keeps its colour.
-- **Patch size.** The patch is sized at start to cover the ground in view at the default zoom, between 14 and 30 squares across. Portrait phones hit the cap. A soft frame on the page fades the screen edges into the background, hiding the patch edge when zoomed out. There is no fog: under an orthographic camera it formed horizontal dither bands that looked like board seams.
-- **Precision.** Render coordinates are rebased by an even number of squares whenever the pawn is more than 32 squares from the origin, so they stay small however far it walks.
+- **Arena.** 12×12 squares (`BOARD`), shared from two baked squares with `createSplatInstances`, framed by the art thread's walnut frame with rank and file inlays, on an oak tabletop ringed with board-game props (checkers, Monopoly houses and a hotel, dice, Othello discs, a Stratego piece, the game box lid). The frame, table and props come from `web/level-art.js` and bake once as their own world, drawn as one static instance (splats facing down are dropped); the frame's rails are the walls. Hops and dashes that would land off the board are refused. The HUD shows the square in chess notation (files a–l, ranks 1–12; the player starts on f1).
+- **Level data.** `LEVEL` at the top of `web/game.js` holds the player's start (centre of the near edge, facing in), the seven pawns (square and walking direction each) and the brute's square. Edit it to change the layout.
+- **Flow.** The pawns drop in at the start. Once every pawn is down, the brute drops in on its square (or the nearest free one). Beating it shows **Board cleared**; being cut down shows **Cut down**. R or **Restart** restarts the whole level, at any time. `?empty=1` starts an empty board with no pawns or brute, for tests.
+- **Zoom-out.** Z or the button frames the whole arena; the art grid may grow to 1024 px tall (`?artmax=`) to keep 20 art pixels per world unit.
+- A soft frame on the page fades the screen edges into the background. There is no fog: under an orthographic camera it formed horizontal dither bands that looked like board seams.
 
 ### Animation
 
@@ -105,10 +107,9 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 
 ### Enemies
 
-- **Pool.** Up to five of a six-pawn pool (rig parts `e0`, `e1`, …) are active at once.
-- **Spawning.** A new one spawns every 1.2–3.2 s, six squares out on a random side, facing in. It drops from above and lands with the hop squash.
-- **Movement.** It hops forward at random intervals of 0.4–2.8 s and waits when the next square is taken.
-- **Despawning.** It disappears once it is more than 11 squares from the player. On a large view that can happen on screen.
+- **Pool.** One rig part set per pawn in the level (`e0`, `e1`, …), and the brute last.
+- **Movement.** It hops forward at random intervals of 0.4–2.8 s and waits when the next square is taken. At the board's edge it turns round (0.4 s) and walks back. Stuck behind another piece for 2 s (`?stuck=`), it turns round too. It never turns toward the player.
+- **The pawn brute.** A burly pawn 1.35× the size (the art thread's `sculptBrute`, with an iron collar; contact uses its `bruteSDF`), on one square, with a warhammer (`sculptWarhammer`). It moves like a pawn. It swings when the player is on any of the seven squares round it except the one straight behind, and the hammer sweeps all seven (±149° from its front); all seven show danger pips. Its wind-up is 0.8 s (`?bwindup=`) against a pawn's 0.5 s, with the hammer shaking as it comes up. One sword hit kills it (1 HP, for testing). A hammer blow takes 2 HP (`?bdamage=`, placeholder). It can be parried like any swing, which stuns it for 1 s (placeholder).
 
 ### Enemy attacks
 
@@ -146,7 +147,6 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | --- | --- |
 | `?light=baked` | Turns off live lighting. |
 | `?enemies=3` | Sets the enemy pool size. |
-| `?w=16` | Sets the board patch size (keep it even). By default it is sized to the view. |
 | `?yaw=20&pitch=35&zoom=2.25` | Camera: board rotation on screen and pitch down, both in degrees; zoom in squares each way along the short screen axis. |
 | `?art=168` | Sets the art grid's height directly. |
 | `?behind=double` | A direction straight behind the pawn makes two swings, turning it round. |

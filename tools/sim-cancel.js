@@ -12,10 +12,14 @@ vm.runInContext(`var KIT = { M: {
   mul(A, B) { const o = []; for (let i = 0; i < 3; i++) for (let j = 0; j < 3; j++) o.push(A[i*3]*B[j] + A[i*3+1]*B[3+j] + A[i*3+2]*B[6+j]); return o; } } };`, ctx);
 let src = fs.readFileSync(root + '/web/game.js', 'utf8');
 src = src.replace(/^import .*$/mg, '');
+// level-art.js is an ES module: inline it as ART
+const art = fs.readFileSync(root + '/web/level-art.js', 'utf8').replace(/^export /mg, '');
+src = `const ART = (function () { ${art}; return { LEVEL_PALETTE, bruteSDF, TABLE_Y, HAMMER }; })();\n` + src;
 src = src.slice(0, src.indexOf('// ---------- HUD ----------'));
 const el = () => ({ textContent: '', hidden: true, addEventListener() {}, classList: { add() {}, remove() {} } });
 vm.runInContext(`const location = { search: ${JSON.stringify(query)} }; const document = { getElementById: () => (${el.toString()})() };
 const flash = () => {}; const showHp = () => {}; const showStamina = () => {}; const banner = {}; ` + src + `
+state.phase = "empty";   // no level: the sims place pieces themselves
 this.run = function (first, second, at) {
   state.phi = 0; state.sq = [0, 0]; state.act = null; state.nextSpawn = 1e9; queued = { kind: first[0], side: first[1], q: first[2] };
   let prev = null, jump = { yaw: 0 }, cancelled = false, kinds = [];
@@ -55,12 +59,17 @@ this.duel = function (ex, ez, move, pressAt) {
   return '-';
 };
 // An idle enemy on (ex, ez) facing dir, the player standing still: which side does it swing, and does it land?
-this.ambush = function (ex, ez, dir) {
+this.ambush = function (ex, ez, dir, idx = 0, parryAt = null, parrySide = 1) {
   state.hp = 99; state.hurtAt = -Infinity; state.dead = null; state.phi = 0; state.sq = [0, 0]; state.act = null; state.nextSpawn = 1e9; queued = null;
-  const e = enemies[0]; Object.assign(e, { mode: 'idle', sq: [ex, ez], dir, t0: 0, wait: 1e9, rested: 0, stunUntil: 0, struck: false, blocked: false });
-  for (let t = 0, prev = 0; t < 1.6; prev = t, t += 1 / 60) { step(t); checkEnemyHits(prev, t, null, null); if (e.struck) break; }
-  return { side: e.side, hit: e.struck };
+  for (const o of enemies) o.mode = 'off';
+  const e = enemies[idx]; Object.assign(e, { mode: 'idle', sq: [ex, ez], dir, t0: 0, wait: 1e9, rested: 0, stunUntil: 0, struck: false, blocked: false });
+  for (let t = 0, prev = 0; t < 2.5; prev = t, t += 1 / 60) {
+    if (parryAt !== null && t >= parryAt && !state.act && !queued && t < parryAt + 0.02) queued = { kind: 'parry', side: parrySide };
+    step(t); checkEnemyHits(prev, t, null, null); if (e.struck || e.blocked) break;
+  }
+  return { mode: e.mode, side: e.side, hit: e.struck, parried: e.blocked };
 };`, ctx);
+const ENEMIES_N = vm.runInContext('ENEMIES', ctx);
 const cases = [
   ['swing left alone', ['swing', 1], null, 0],
   ['parry right alone', ['parry', -1], null, 0],
@@ -88,3 +97,8 @@ for (const [name, move] of [['180 block', ['parry', 1, 2]], ['spin slash', ['swi
 // Enemies pick their swing side from where the player is
 for (const [label, ex, ez, dir] of [['player ahead of it', 0, -1, [0, 1]], ['player on its front-left', -1, -1, [0, 1]], ['player on its front-right', 1, -1, [0, 1]]])
   console.log(('enemy swing, ' + label).padEnd(34), JSON.stringify(ctx.ambush(ex, ez, dir)));
+// The brute, with the player on each square round it (it faces +z, toward the player's row when ahead)
+for (const [dx, dz, where] of [[0, -1, 'ahead'], [-1, -1, 'its front-right'], [1, -1, 'its front-left'], [-1, 0, 'its right'], [1, 0, 'its left'], [-1, 1, 'its back-right'], [1, 1, 'its back-left'], [0, 1, 'straight behind']])
+  console.log(('brute, player ' + where).padEnd(34), JSON.stringify(ctx.ambush(-dx, dz, [0, 1], ENEMIES_N - 1)));
+let row = ''; for (let at = 0; at <= 1.2; at += 0.05) row += (r => r.parried ? 'P' : r.hit ? 'h' : '-')(ctx.ambush(0, -1, [0, 1], ENEMIES_N - 1, at, 1));
+console.log('brute ahead, quarter parry left pressed 0..1.2 s'.padEnd(50), row);
