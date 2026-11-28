@@ -9,16 +9,22 @@ const params = new URLSearchParams(location.search);
 // hop.js palette (0 bg, 1-5 ivory, 6-8 dark squares, 9-11 light squares) plus 12-16 ebony for the enemy pawns
 const PALETTE = [0x0b0d14, 0x3a2f2a, 0x7a634f, 0xb89c7c, 0xe2cfae, 0xfff4dc,
   0x1c2230, 0x2a3448, 0x3a4862, 0x4d5d7c, 0x6a7da0, 0x8a9cc0,
-  0x120d0e, 0x241a1a, 0x3b2c29, 0x5a4540, 0x7e655b];
+  0x120d0e, 0x241a1a, 0x3b2c29, 0x5a4540, 0x7e655b,
+  0x6e2622, 0xa8443a];   // 17–18: danger-square marks
 const num = (name, fallback) => Number(params.get(name)) || fallback;   // ?name=value overrides, for feel testing
 const SQ = 1.3;          // square size, as in hop.js
 // WINDOW (squares kept around the pawn, even) is sized to the view at start; ?w= overrides it
-const HOP = num('hop', 1.0);       // seconds per hop, as in hop.js
+const HOP = num('hop', 0.6);       // seconds per player hop (was 1.0, as in hop.js; same curve, just quicker)
+const ENEMY_HOP = num('ehop', 1.0); // seconds per enemy hop (unchanged)
 const SWING = num('swing', 0.7);   // seconds per swing
 // Dash and shield. Every value marked PLACEHOLDER is a stand-in until the design decides it.
 const DASH = num('dash', 0.45);    // seconds per dash
 const DASH_SQUARES = 2;            // a dash covers two squares, like a pawn's opening move
-const DASH_BLOCKED = 'cancel';     // PLACEHOLDER: an enemy on either square cancels the dash (it does not stop short)
+// A hop or dash may never land on an enemy's square (or one an enemy is hopping into); the move is refused.
+// A dash passes through an enemy on its first square.
+const STAMINA = num('stamina', 3);         // stamina units; a dash costs one, and with none a dash is a plain hop
+const STAMINA_REFILL = num('refill', 8);   // seconds to refill one unit; a kill also refills one
+const DANGER_MARKS = params.get('danger') !== '0';   // marks on each enemy's front three squares (?danger=0 hides)
 const PARRY = num('parry', 0.7);   // seconds per parry (window: 0.1–0.42 s in)
 const PARRY_TURNS = true;          // a parry turns the pawn a quarter turn toward its side, like a swing
 const PASSIVE_BLOCK = params.get('passive') === '1';   // PLACEHOLDER: the resting shield does not block; only a parry does
@@ -163,6 +169,11 @@ function bakeWorld() {
   S.lathe([0, 0.005, 0], 0.01, 0.42, { r: [6, 6] }, { res: 0.05, tag: 'shadow' });
   S.bake();
   for (let i = 0; i < ENEMIES; i++) { S.lathe(add(EREST(i), [0, 0.005, 0]), 0.01, 0.42, { r: [6, 6] }, { res: 0.06, tag: `e${i}sh` }); S.bake(); }
+  // Danger marks: a small red pip on each of an enemy's front three squares (baked facing -z, turned by the rig)
+  for (let i = 0; i < ENEMIES; i++) {
+    for (const dx of [-1, 0, 1]) S.lathe(add(EREST(i), [dx * SQ, 0.007, -SQ]), 0.008, 0.1, { r: [17, 18] }, { res: 0.03, tag: `e${i}dz` });
+    S.bake();
+  }
 
   sculptPawn(S, ivory, 'pawn', true);
   S.bake();
@@ -339,6 +350,7 @@ const state = {
   taken: 0,
   nextSpawn: 1.5,
   hp: PLAYER_HP,
+  stamina: STAMINA, staminaAt: null,   // units left; when the next unit refills (null when full)
   hurtAt: -Infinity,  // when the player was last hit
   dead: null          // the cut, once the last hit point is gone
 };
@@ -382,6 +394,29 @@ function occupied() {
   return o;
 }
 
+// Squares enemies stand on or are hopping into
+function enemySquares() {
+  const o = new Set();
+  for (const e of enemies) {
+    if (e.mode === 'off' || e.mode === 'dying') continue;
+    o.add(sqKey(...e.sq));
+    if (e.mode === 'hop') o.add(sqKey(e.sq[0] + e.dir[0], e.sq[1] + e.dir[1]));
+  }
+  return o;
+}
+
+// Stamina: discrete units. Spending one starts the refill clock; each refill restarts it until the bar is full.
+function spendStamina(now) {
+  state.stamina--;
+  if (state.staminaAt === null) state.staminaAt = now + STAMINA_REFILL;
+  showStamina();
+}
+function gainStamina(now) {
+  state.stamina = Math.min(STAMINA, state.stamina + 1);
+  state.staminaAt = state.stamina < STAMINA ? now + STAMINA_REFILL : null;
+  showStamina();
+}
+
 function spawn(now) {
   const e = enemies.find(e => e.mode === 'off');
   if (!e) return;
@@ -417,7 +452,7 @@ function stepEnemies(now) {
     const far = Math.max(Math.abs(e.sq[0] - state.sq[0]), Math.abs(e.sq[1] - state.sq[1])) > DESPAWN_DIST;
     if (e.mode !== 'off' && e.mode !== 'dying' && far) { e.mode = 'off'; e.dirty = true; continue; }
     if (e.mode === 'drop' && now - e.t0 >= 0.75) { e.mode = 'idle'; e.t0 = now; }
-    if (e.mode === 'hop' && now - e.t0 >= HOP) {
+    if (e.mode === 'hop' && now - e.t0 >= ENEMY_HOP) {
       e.sq = [e.sq[0] + e.dir[0], e.sq[1] + e.dir[1]];
       e.mode = 'idle'; e.t0 = now; e.wait = rand(0.4, 2.8);
     }
@@ -445,8 +480,10 @@ function step(now) {
     state.restore = true; state.dead = null; state.hp = PLAYER_HP; state.hurtAt = -Infinity;
     state.taken = 0; taken.textContent = 0; state.nextSpawn = now + 1.5;
     for (const e of enemies) if (e.mode !== 'off') { e.mode = 'off'; e.dirty = true; if (e.cut) e.restore = true; }
-    showHp(); banner.hidden = true;
+    state.stamina = STAMINA; state.staminaAt = null;
+    showHp(); showStamina(); banner.hidden = true;
   }
+  if (state.staminaAt !== null && now >= state.staminaAt) gainStamina(now);
   const a = state.act;
   if (a) {
     const u = (now - a.t0) / DURATION[a.kind];
@@ -465,12 +502,15 @@ function step(now) {
     if (next?.kind === 'dir') next = moveToward(next);
     if (next?.kind === 'hop' || next?.kind === 'dash') {
       const [fx, fz] = facingVec(state.phi), dir = [Math.round(fx), Math.round(fz)];
-      // An enemy standing on a square the move passes through blocks it
+      if (next.kind === 'dash' && state.stamina < 1) next = { kind: 'hop' };   // out of stamina: a plain hop
+      // Never land on an enemy: its square, or the square it is hopping into, refuses the move. A dash passes over
+      // its first square, enemy or not.
       const n = next.kind === 'dash' ? DASH_SQUARES : 1;
-      const stands = k => enemies.some(e => (e.mode === 'idle' || e.mode === 'drop' || e.mode === 'swing') && e.sq[0] === state.sq[0] + k * dir[0] && e.sq[1] === state.sq[1] + k * dir[1]);
-      let blocked = false;
-      for (let k = 1; k <= n; k++) blocked ||= stands(k);
-      if (!blocked) state.act = { kind: next.kind, dir, t0: now };
+      const land = sqKey(state.sq[0] + n * dir[0], state.sq[1] + n * dir[1]);
+      if (!enemySquares().has(land)) {
+        state.act = { kind: next.kind, dir, t0: now };
+        if (next.kind === 'dash') spendStamina(now);
+      }
     } else if (next) state.act = { kind: next.kind, side: next.side, t0: now };
   }
   stepEnemies(now);
@@ -547,7 +587,7 @@ function enemyPose(e, now) {
     if (u < 0.4) { const f = u / 0.4; y = 4 * (1 - f * f); }
     else { const h = hopPose(0.7 + 0.3 * Math.min(1, (u - 0.4) / 0.35)); A = K.M.mul(scaleY(h.sy), A); }
   } else if (e.mode === 'hop') {
-    const h = hopPose(Math.min(1, u / HOP));
+    const h = hopPose(Math.min(1, u / ENEMY_HOP));
     x += e.dir[0] * SQ * h.along; z += e.dir[1] * SQ * h.along; y = h.y;
     A = K.M.mul(hopMatrix(h, e.dir), A);
   } else if (e.mode === 'swing') {
@@ -657,6 +697,7 @@ function killEnemy(e, ep, p, t, stage, rig, now) {
   e.mode = 'dying'; e.t0 = now; e.dirty = true;
   state.taken++;
   taken.textContent = state.taken;
+  if (state.stamina < STAMINA) gainStamina(now);   // a kill refills one unit
 }
 
 function killPlayer(e, ep, p, t, stage, now) {
@@ -692,7 +733,9 @@ function flash(text) {
   flashEl.textContent = text; flashEl.hidden = false;
   clearTimeout(flashTimer); flashTimer = setTimeout(() => { flashEl.hidden = true; }, 600);
 }
-showHp();
+const stEl = document.getElementById('stamina');
+function showStamina() { stEl.textContent = '◆'.repeat(Math.max(0, state.stamina)) + '◇'.repeat(Math.max(0, STAMINA - state.stamina)); }
+showHp(); showStamina();
 // Restart after death (PLACEHOLDER): R or the button puts the pawn back together where it fell and clears the board
 function restart() { if (state.dead) state.restartPending = true; }
 document.getElementById('restart').addEventListener('click', restart);
@@ -732,7 +775,7 @@ addEventListener('blur', () => { held.clear(); spaceHeld = false; });
 // sideways swipe does (swing or parry); swipes that start on the button count too. The zoom-out button pulls the
 // camera back until the next move.
 const SWIPE_MIN = 24;                                       // px: shorter is a tap
-const swipeLong = () => Math.max(90, 0.2 * Math.min(innerWidth, innerHeight));   // PLACEHOLDER: px for a dash
+const swipeLong = () => Math.max(150, num('dashswipe', 0.35) * Math.min(innerWidth, innerHeight));   // px for a dash (was 90 px or a fifth)
 const modeBtn = document.getElementById('mode'), zoomBtn = document.getElementById('zoom');
 state.shieldMode = false;
 function setMode(shield) {
@@ -863,14 +906,20 @@ function start() {
       const sh = 1 - 0.45 * Math.min(1, p.y / 0.8);
       rig.set('shadow', [sh, 0, 0, 0, 1, 0, 0, 0, sh], [0, 0, 0], [p.x, 0, p.z]);
       for (const e of enemies) {
-        const body = `e${e.i}`, cut = `e${e.i}cut`, shadow = `e${e.i}sh`, sword = `e${e.i}sword`;
+        const body = `e${e.i}`, cut = `e${e.i}cut`, shadow = `e${e.i}sh`, sword = `e${e.i}sword`, marks = `e${e.i}dz`;
+        // Danger marks follow the enemy across the board, once it has landed and until it dies
+        if (DANGER_MARKS && (e.mode === 'idle' || e.mode === 'hop' || e.mode === 'swing')) {
+          let [mx, mz] = toRender(e.sq);
+          if (e.mode === 'hop') { const k = hopPose(Math.min(1, (p.now - e.t0) / ENEMY_HOP)).along * SQ; mx += e.dir[0] * k; mz += e.dir[1] * k; }
+          rig.set(marks, rotY(phiOf(e.dir)), EREST(e.i), [mx, 0, mz]);
+        } else rig.set(marks, ...HIDDEN);
         const swordAt = add(EREST(e.i), HAND);
         if (e.restore) {   // put a sliced enemy back together for its next life
           if (e.cut?.split) rig.assign(body, e.rows);
           e.cut = null; e.restore = false;
         }
         if (e.mode === 'off') {
-          if (e.dirty) { for (const n of [body, cut, shadow, sword]) rig.set(n, ...HIDDEN); e.dirty = false; }
+          if (e.dirty) { for (const n of [body, cut, shadow, sword, marks]) rig.set(n, ...HIDDEN); e.dirty = false; }
           continue;
         }
         if (e.mode === 'dying') {
