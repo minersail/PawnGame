@@ -90,11 +90,47 @@ function depthBounds(row, view) {
     mid + Math.max(x*sortLo[0],x*sortHi[0]) + Math.max(y*sortLo[1],y*sortHi[1]) + Math.max(z*sortLo[2],z*sortHi[2]) + slack];
 }
 
+// PawnGame patch: under a camera that never turns (orthographic, a fixed view direction), stationary instances keep
+// their depth order however the camera slides; only a constant is added to every depth. So the instances are sorted
+// once per view direction and placement revision, and each frame only the world's own splats are sorted and merged in.
+// world.sortSkip (a Uint8Array, one per world splat) leaves splats out of the order entirely, so they are not drawn.
+function createStaticOrder() {
+  let key = null, depth = null, order = null, refs = null, rowOf = null, visible = null;
+  return {
+    prepare(placements, m2, m6, m10) {
+      let versions = placements.length + ':' + m2.toFixed(6) + ',' + m6.toFixed(6) + ',' + m10.toFixed(6);
+      for (const row of placements) versions += ',' + (row.version ?? 0) + (row.authored.visible ? '' : 'h');
+      if (versions === key) return;
+      key = versions;
+      let total = 0;
+      for (const row of placements) total += row.asset.count;
+      const d = new Float32Array(total), g = new Int32Array(total), r = new Int32Array(total), w = new Int32Array(total);
+      const project = (x, y, z) => m2 * x + m6 * y + m10 * z;
+      let n = 0;
+      for (const row of placements) {
+        for (let o = 0, k = 0; o < row.asset.data.length && k < row.asset.count; o += 16, k++, n++) {
+          d[n] = placedDepth(row, o, project); g[n] = row.start + k; r[n] = row.index + 1; w[n] = row.index;
+        }
+      }
+      const idx = Array.from({ length: total }, (_, i) => i).sort((a, b) => d[a] - d[b]);
+      depth = new Float32Array(total); order = new Int32Array(total); refs = new Int32Array(total); rowOf = new Int32Array(total);
+      idx.forEach((i, j) => { depth[j] = d[i]; order[j] = g[i]; refs[j] = r[i]; rowOf[j] = w[i]; });
+      visible = new Uint8Array(placements.length);
+    },
+    get depth() { return depth; }, get order() { return order; }, get refs() { return refs; }, get rowOf() { return rowOf; },
+    get visible() { return visible; }
+  };
+}
+
 export function createDepthSorter() {
   const counts = new Uint32Array(65536);
-  let depth, keys, order;
+  let depth, keys, order, worldOrder;
+  const statics = createStaticOrder();
   return function sort(world, view, time, instances, placements, stabilize, rainClocks = [time,time], rainWind = [0,0], eye, rasterRows) {
     const { count, data } = world;
+    const ortho = !(eye && world.gaussianSort === 'cameraDistance');
+    if (instances && placements && ortho && !stabilize && !rasterRows && globalThis.PAWN_STATIC_SORT !== false)
+      return mergedSort(world, view, time, instances, placements, rainClocks, rainWind);
     const stride = instances ? 2 : 1;
     const total = count + (instances?.reduce((sum,row) => sum + row.asset.count, 0) ?? 0);
     if (!depth || depth.length < total) {
@@ -210,4 +246,68 @@ export function createDepthSorter() {
     }
     return order.length === next * stride ? order : order.subarray(0,next * stride);
   };
+
+  // The world's splats sorted on their own (counting sort, as above), merged with the cached instance order
+  function mergedSort(world, view, time, instances, placements, rainClocks, rainWind) {
+    const { count, data } = world, skip = world.sortSkip;
+    const m2 = view[2], m6 = view[6], m10 = view[10], m14 = view[14];
+    statics.prepare(placements, m2, m6, m10);
+    const sDepth = statics.depth, sOrder = statics.order, sRefs = statics.refs, sRow = statics.rowOf, vis = statics.visible;
+    vis.fill(0);
+    for (const row of instances) vis[row.index] = 1;
+    if (!depth || depth.length < count) { depth = new Float32Array(Math.max(count, 1)); keys = new Uint16Array(depth.length); }
+    if (!worldOrder || worldOrder.length < count) worldOrder = new Int32Array(Math.max(count, 1));
+    const project = (x, y, z) => m2 * x + m6 * y + m10 * z + m14;
+    for (let i = 0, o = 0; i < count; i++, o += 16) depth[i] = project(data[o], data[o + 1], data[o + 2]);
+    for (const i of world.moving ?? []) {
+      if (i >= count) continue;
+      const o = i * 16, kind = data[o + 11] % 16;
+      const phase = data[o + 12], speed = data[o + 13], range = data[o + 14];
+      let x = data[o], y = data[o + 1], z = data[o + 2];
+      if (kind === 2 || kind === 3) {
+        const clock = kind === 2 ? rainClocks[(Math.round(data[o + 11]) & 8192) ? 1 : 0] : time;
+        const f = clock * speed / range + phase, flight = (f - Math.floor(f)) * range;
+        y += kind === 2 ? -flight : flight;
+        if (kind === 2) { x += rainWind[0] * flight / Math.max(speed, .00001); z += rainWind[1] * flight / Math.max(speed, .00001); }
+      } else if (kind === 5) {
+        const theta = time * speed, c = Math.cos(theta), s = Math.sin(theta), nx = c * x + s * z;
+        z = -s * x + c * z; x = nx;
+      } else y += Math.sin(time * speed + phase) * range;
+      depth[i] = project(x, y, z);
+    }
+    const bones = world.anim?.bones;
+    if (bones) for (const i of world.anim.boned ?? []) {
+      if (i >= count) continue;
+      const o = i * 16, x = data[o], y = data[o + 1], z = data[o + 2], b = data[o + 12] * 12;
+      depth[i] = project(bones[b] * x + bones[b + 1] * y + bones[b + 2] * z + bones[b + 9],
+        bones[b + 3] * x + bones[b + 4] * y + bones[b + 5] * z + bones[b + 10],
+        bones[b + 6] * x + bones[b + 7] * y + bones[b + 8] * z + bones[b + 11]);
+    }
+    let min = Infinity, max = -Infinity, live = 0;
+    for (let i = 0; i < count; i++) {
+      if (skip && skip[i]) continue;
+      const z = depth[i]; live++;
+      if (z < min) min = z;
+      if (z > max) max = z;
+    }
+    for (const i of world.back ?? []) if (i < count) depth[i] = min;
+    const scale = 65535 / (max - min || 1);
+    counts.fill(0);
+    for (let i = 0; i < count; i++) { if (skip && skip[i]) continue; counts[keys[i] = (depth[i] - min) * scale | 0]++; }
+    let next = 0;
+    for (let bucket = 0; bucket < counts.length; bucket++) { const size = counts[bucket]; counts[bucket] = next; next += size; }
+    for (let i = 0; i < count; i++) { if (skip && skip[i]) continue; worldOrder[counts[keys[i]]++] = i; }
+    const total = live + sOrder.length;
+    if (!order || order.length < total * 2) order = new Int32Array(Math.ceil(total * 1.25) * 2);
+    let a = 0, s = 0, j = 0;
+    while (a < live || s < sOrder.length) {
+      if (s < sOrder.length && !vis[sRow[s]]) { s++; continue; }
+      if (s >= sOrder.length || (a < live && depth[worldOrder[a]] <= sDepth[s] + m14)) {
+        order[j++] = worldOrder[a++]; order[j++] = 0;
+      } else {
+        order[j++] = count + sOrder[s]; order[j++] = sRefs[s]; s++;
+      }
+    }
+    return order.subarray(0, j);
+  }
 }

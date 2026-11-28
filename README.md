@@ -157,6 +157,9 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | `?passive=1` | Lets the resting shield block blades too. |
 | `?eside=-1` | Makes enemies swing right instead of left at a player straight ahead. |
 | `?hp=3&invuln=1` | Sets the player's hit points and the invulnerable time after a hit. |
+| `?perf=1` | Shows a frame-time readout: fps, and milliseconds per frame for game logic, posing, the render call (including the depth sort) and everything else (GPU and browser). |
+| `?bones=0` | Poses pieces on the CPU instead of with GPU bones (`K.bones`). |
+| `?sort=full` | Sorts every splat each frame instead of merging the moving splats into the cached board and arena order. |
 
 ### Testing hooks
 
@@ -165,6 +168,13 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 - **Frame counter.** `window.__frames` counts frames.
 - **Swipes.** `window.__swipe(dx, dy, shield)` performs a touch swipe in pixels (negative dy is up). Pass `shield: true` for a swipe from the left half (a parry).
 - **Software rendering.** Headless Chromium with SwiftShader renders at about 1–2 fps, so tests step the clock instead of relying on real time.
+
+### Performance
+
+- **GPU bones.** Every piece splat is tagged with its part's bone (`K.bones.tag`), so the shader poses it. The CPU no longer rewrites and re-uploads piece splats each frame.
+- **Cached sort.** The camera never rotates, so the depth order of the board and arena instances only changes when a row changes. The renderer patch in `web/ink/src/webgl/view.mjs` keeps that order and merges in the counting-sorted world splats each frame.
+- **Hidden parts.** Parts posed with the hidden pose are left out of the sort and the draw (`world.sortSkip`).
+- **Measured.** In the cloud on SwiftShader, the JavaScript per frame went from about 6.8 ms to about 5.3 ms. Almost all of the frame there is the software GPU.
 
 ## Offline scenes
 

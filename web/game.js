@@ -95,7 +95,10 @@ const BRUTE_DAMAGE = num('bdamage', 2);          // PLACEHOLDER: hit points a ha
 const BRUTE_ARC = 2.6;                           // the hammer sweeps ±149° round from the front
 const HAMMER = [0.3, 1.66];                      // contact runs along the handle up through the head
 const HAMMER_R = 0.13;                           // the head's half-size, for contact
-const ART_MAX = num('artmax', 1024);             // largest art grid height (zoom-out to the whole arena needs more)
+const ART_MAX = num('artmax', 1024);
+const GPU_BONES = params.get('bones') !== '0';   // pose rigged splats on the graphics card (?bones=0: the old CPU path)
+const PERF = params.get('perf') === '1';         // ?perf=1: a frame-time readout in the corner
+globalThis.PAWN_STATIC_SORT = params.get('sort') !== 'full';   // ?sort=full: the renderer's original full sort every frame             // largest art grid height (zoom-out to the whole arena needs more)
 const SLOW = Number(params.get('slow')) || 1;          // ?slow=8 plays everything 8x slower, for inspection
 const LIVE_LIGHT = params.get('light') !== 'baked';
 // Camera: fixed to the world and orthographic. It follows the pawn but never turns with it. Jordan's picks: yaw 20°
@@ -1091,6 +1094,25 @@ function artSize() {
   return { width: Math.round(height * aspect), height };
 }
 
+// ?perf=1: frame time, and where the JavaScript part of it goes, averaged over the last second. Whatever is left of the
+// frame interval after the JavaScript is the graphics card (and the browser) at work.
+function createPerf() {
+  const el = document.createElement('pre');
+  el.style.cssText = 'position:fixed;left:8px;top:50%;margin:0;padding:6px 8px;background:#000a;color:#cfe;font:11px/1.35 monospace;z-index:9;pointer-events:none';
+  document.body.appendChild(el);
+  let n = 0, sum = [0, 0, 0, 0], t0 = performance.now(), size = '';
+  return {
+    add(interval, game, pose, render, w, h) {
+      n++; sum[0] += interval; sum[1] += game; sum[2] += pose; sum[3] += render; size = w + '×' + h;
+      if (performance.now() - t0 < 1000) return;
+      const f = k => (sum[k] / n).toFixed(1).padStart(5);
+      const js = (sum[1] + sum[2] + sum[3]) / n;
+      el.textContent = `fps    ${(1000 / (sum[0] / n)).toFixed(0)}\nframe ${f(0)} ms\n game ${f(1)}\n pose ${f(2)}\n render${f(3)} (incl. sort)\n other${Math.max(0, sum[0] / n - js).toFixed(1).padStart(5)} (GPU, browser)\nart ${size}  bones ${GPU_BONES ? 'GPU' : 'CPU'}  sort ${globalThis.PAWN_STATIC_SORT ? 'cached' : 'full'}`;
+      n = 0; sum = [0, 0, 0, 0]; t0 = performance.now();
+    }
+  };
+}
+
 function start() {
   const t0 = performance.now();
   const light = bakeSquare({ r: [9, 10, 11] }, 21);
@@ -1111,8 +1133,40 @@ function start() {
   state.pawnRows = Int32Array.from(rig.list[rig.part('pawn')]);
   state.rig = rig;
 
-  let p = pose(0);
+  // ---- performance ----
+  // GPU bones (K.bones): every rigged splat stays in its rest pose on the graphics card, and each frame only the rig's
+  // matrices (12 numbers a part, rig.M) go up; the card turns and moves each splat by its part's matrix as it draws.
+  // The rig then never moves those splats on the CPU (rig.free). ?bones=0 keeps the old CPU path, for comparison.
+  const D = world.data, N = world.count, changed = new Set();
+  const markRow = i => changed.add(i >> 9);
+  if (GPU_BONES) {
+    const ids = [], bids = [];
+    for (let i = 0; i < N; i++) if (rig.bid[i]) { ids.push(i); bids.push(rig.bid[i]); }
+    const tagged = K.bones.tag(world, Int32Array.from(ids), Uint16Array.from(bids));
+    for (const i of tagged.boned) rig.free[i] = 1;
+    stage.bones = rig.M; stage.boned = tagged.boned;   // world.anim is the stage: the renderer reads its bones from here
+    console.log('GPU bones:', tagged.boned.length, 'splats on', rig.M.length / 12, 'parts;', tagged.cpu.length, 'left on the CPU');
+  }
+  // Hidden parts (parked enemies, unseen pips and orbs, the cut half before a cut) are left out of the sort and the
+  // draw altogether: world.sortSkip, read by the patched sorter in ink/src/webgl/view.mjs.
+  const skip = world.sortSkip = new Uint8Array(N), hiddenPart = new Uint8Array(rig.M.length / 12);
   const HIDDEN = [uniform(0.001), [0, 0, 0], [0, -60, 0]];
+  const setPart = rig.set;
+  rig.set = (b, A, o, q) => {
+    const id = typeof b === 'string' ? rig.part(b) : b, hide = A === HIDDEN[0] ? 1 : 0;
+    if (id && hiddenPart[id] !== hide) { hiddenPart[id] = hide; for (const i of rig.list[id]) skip[i] = hide; }
+    setPart(b, A, o, q);
+  };
+  // A cut moves splats to another part: on the card their bone number changes too
+  const assignPart = rig.assign;
+  rig.assign = (name, indices) => {
+    assignPart(name, indices);
+    for (const i of indices) { if (GPU_BONES) D[i * 16 + 12] = rig.bid[i]; skip[i] = hiddenPart[rig.bid[i]]; markRow(i); }
+    return rig;
+  };
+  for (let b = 1; b < hiddenPart.length; b++) hiddenPart[b] = 0;
+
+  let p = pose(0);
   stage.add({
     pre() {
       if (state.restore) { if (state.restoreSplit) rig.assign('pawn', state.pawnRows); state.restore = false; state.restoreSplit = false; }
@@ -1180,13 +1234,24 @@ function start() {
   status.hidden = true;
   console.log('baked in', Math.round(performance.now() - t0), 'ms;', world.count, 'splats in the world,', light.count + dark.count, 'per square pair; live light', LIVE_LIGHT);
 
-  // Everything in the base world is re-posed every frame: mark all of its rows changed
+  // Rows of the world that changed this frame and must go up to the card: with GPU bones, only what the live lighting
+  // re-shades and what a cut retags (the stage marks those in stage.rows); without, everything
   const allRows = Array.from({ length: Math.ceil(world.count / 512) }, (_, i) => i);
+  const changedRows = () => {
+    if (!GPU_BONES) return allRows;
+    const rows = stage.rows;
+    for (let r = 0; r < rows.length; r++) if (rows[r]) { changed.add(r); rows[r] = 0; }
+    const out = [...changed].sort((a, b) => a - b); changed.clear();
+    return out;
+  };
+  const perf = PERF ? createPerf() : null;
   let last = performance.now(), prev = null;
   function frame(ms) {
     // window.__clock (seconds), when a test sets it, replaces the real clock so frames can be inspected one by one
     const now = window.__clock ?? ms / 1000 / SLOW, dt = window.__clock !== undefined ? 1 / 60 : Math.min(0.1, (ms - last) / 1000 / SLOW);
+    const interval = ms - last;
     last = ms;
+    const tGame = performance.now();
     step(now);
     p = pose(now);
     checkHits(prev, p, stage, rig);
@@ -1207,16 +1272,19 @@ function start() {
     const goalZoom = Math.min(ART_MAX / (2 * half0 * 20), state.zoomOut ? arenaZoom(aspect, half0) : state.zoomScale);
     state.camZoom += (goalZoom - state.camZoom) * (1 - Math.exp(-dt * 5));
 
+    const tPose = performance.now();
     world.anim.update(dt, now);
+    const tRender = performance.now();
     const { width, height } = artSize();
     renderer.render(world, {
-      width, height, time: now, instances: board, changedRows: allRows,
+      width, height, time: now, instances: board, changedRows: changedRows(),
       // the orthographic view's half-height is dist × tan(fov / 2), with ink-studio's default 38° field of view
       camera: { target: state.target, dist: viewHalfHeight(width, height) * state.camZoom / ORTHO_TAN, yaw: CAM.yaw, pitch: CAM.pitch, projection: 'orthographic' }
     });
     coords.textContent = 'abcdefghijkl'[state.sq[0]] + (BOARD - state.sq[1]);   // chess notation: files a–l, ranks 1–12
     const zl = state.zoomOut ? 'Zoom in' : 'Zoom out';
     if (zoomBtn.textContent !== zl) zoomBtn.textContent = zl;
+    if (perf) perf.add(interval, tPose - tGame, tRender - tPose, performance.now() - tRender, width, height);
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
