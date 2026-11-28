@@ -12,7 +12,7 @@ const PALETTE = [0x0b0d14, 0x3a2f2a, 0x7a634f, 0xb89c7c, 0xe2cfae, 0xfff4dc,
   0x120d0e, 0x241a1a, 0x3b2c29, 0x5a4540, 0x7e655b,
   0x6e2622, 0xa8443a,     // 17–18: danger-square marks
   0xc9a227, 0xf2dc6b];    // 19–20: stun orbs
-const num = (name, fallback) => Number(params.get(name)) || fallback;   // ?name=value overrides, for feel testing
+const num = (name, fallback) => { const v = params.get(name); return v !== null && v !== '' && isFinite(v) ? Number(v) : fallback; };   // ?name=value overrides, for feel testing
 const SQ = 1.3;          // square size, as in hop.js
 // WINDOW (squares kept around the pawn, even) is sized to the view at start; ?w= overrides it
 const HOP = num('hop', 0.6);       // seconds per player hop (was 1.0, as in hop.js; same curve, just quicker)
@@ -26,11 +26,13 @@ const DASH_SQUARES = 2;            // a dash covers two squares, like a pawn's o
 const STAMINA = num('stamina', 3);         // stamina units; a dash costs one, and with none a dash is a plain hop
 const STAMINA_REFILL = num('refill', 8);   // seconds to refill one unit; a kill also refills one
 const DANGER_MARKS = params.get('danger') !== '0';   // marks on each enemy's front three squares (?danger=0 hides)
-const PARRY = num('parry', 0.7);   // seconds per parry (window: 0.1–0.42 s in)
+const PARRY_BASE = num('parry', 0.7);   // seconds per parry, before the extra hold
+const PARRY_HOLD = num('hold', 0.25);    // extra seconds the shield stays up in the braced hold (was 0; ?hold=0 restores)
+const PARRY = PARRY_BASE + PARRY_HOLD;   // whole parry; the shield is up from 0.1 s to 0.42 s + PARRY_HOLD
 const PARRY_TURNS = true;          // a parry turns the pawn a quarter turn toward its side, like a swing
 // Cancels: a swing or parry can be cancelled into another swing or parry outside its active frames (u ranges below).
 // The new move starts partway in, at the wind-up frame nearest the current pose, and cross-fades from it.
-const ACTIVE = { swing: [0.25, 0.55], parry: [0.15, 0.6] };   // the slash; the shield up (bash and hold)
+const ACTIVE = { swing: [0.25, 0.55], parry: [0.15 * PARRY_BASE / PARRY, (0.6 * PARRY_BASE + PARRY_HOLD) / PARRY] };   // the slash; the shield up (bash and hold)
 const BLEND = num('blend', 0.15);           // seconds of cross-fade into a cancelling move
 const CANCEL_BUFFER = num('buffer', 0.15);  // a press during active frames still cancels if the window opens within this
 // PLACEHOLDER: a cancelled move's quarter turn still counts, so swing left into parry right ends facing the same way,
@@ -338,6 +340,11 @@ function dashPose(u) {
 const PARRY_ARC = num('arc', 1.4);
 const PARRY_180_EXTRA = num('arc180', 0.7);   // how far past a quarter the 180° block pre-turns (radians)    // how far round the bash carries the shield, in radians from the front (about 80°)
 function parryPose(u, side) {
+  {  // stretch the hold by PARRY_HOLD seconds: map u on the whole parry back onto the base curve below
+    const B = PARRY_BASE, t = u * PARRY;
+    const tb = t < 0.36 * B ? t : t < 0.6 * B + PARRY_HOLD ? 0.36 * B + (t - 0.36 * B) * (0.24 * B) / (0.24 * B + PARRY_HOLD) : t - PARRY_HOLD;
+    u = Math.min(1, tb / B);
+  }
   let world, turn, up, face, out, parrying = false;
   if (u < 0.15) {                    // cock: shield pulled back across the body, face angled away, the body coils
     const a = ease(u / 0.15);

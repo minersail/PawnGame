@@ -93,7 +93,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Hop.** `hopPose(u)` is the hop curve from `scenes/hop.js`: crouch, arc, landing squash, settle. The lean axis is `up × direction`, so it works in any direction. A held key starts the next hop at 90% of the current one. The player's hop takes 0.6 s (it was 1.0 s, the `hop.js` length); enemies still take 1.0 s (`?ehop=`).
 - **Swing.** `swingPose(u, side)` runs wind-up, slash and recovery over 0.7 s. During the slash the arm extends, the blade swings flat round the front, and the body follows a quarter turn.
 - **Dash.** `dashPose(u)` runs a short coil, a low skim over two squares with a hard forward lean, and a braking skid that rocks back. It reuses the hop's lean and squash matrix.
-- **Parry.** `parryPose(u, side)` is a wide bash, like swinging a door open. The shield cocks back across the body, then sweeps out about 80° (`PARRY_ARC`) round the front to the parry side, its face turning ahead of the arc on its own axis (`face`). It holds there braced, then the body takes a quarter turn and the shield settles in front again. The sword drops back out of the way. Only the bash and hold parry, from about 0.1 to 0.42 s into the 0.7 s move.
+- **Parry.** `parryPose(u, side)` is a wide bash, like swinging a door open. The shield cocks back across the body, then sweeps out about 80° (`PARRY_ARC`) round the front to the parry side, its face turning ahead of the arc on its own axis (`face`). It holds there braced, then the body takes a quarter turn and the shield settles in front again. The sword drops back out of the way. Only the bash and hold parry, from about 0.1 to 0.67 s into the 0.95 s move: the braced hold is stretched by 0.25 s (`?hold=`; `?hold=0` gives the original 0.1–0.42 s window in a 0.7 s move).
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
 - **Shield.** An ivory heater shield (a flat-topped outline curving to a point, extruded, with a raised lighter inner panel that leaves a darker rim) is a child part of the pawn, held directly in front of the pawn at rest, over the sword. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. During a swing it tucks round to the side the swing ends on, so the blade clears it.
 - **Camera.** The camera is fixed to the world and orthographic. It follows the pawn's position but never turns with it. Jordan's picks: yaw 20° (the board turned on screen), pitch 35° down, and the earlier isometric zoom (about 2.25 squares each way along the screen's short axis).
@@ -151,7 +151,7 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | `?art=168` | Sets the art grid's height directly. |
 | `?behind=double` | A direction straight behind the pawn makes two swings, turning it round. |
 | `?slow=8` | Plays everything 8× slower. |
-| `?hop=0.6&dash=0.45&swing=0.7&parry=0.7&ehop=1` | Sets the length of each move in seconds, for feel testing. |
+| `?hop=0.6&dash=0.45&swing=0.7&parry=0.7&hold=0.25&ehop=1` | Sets the length of each move in seconds, for feel testing (`parry` is the base parry, before the extra `hold`). |
 | `?stamina=3&refill=8` | Stamina units, and seconds to refill one. |
 | `?windup=0.5` | Sets the enemy wind-up in seconds. |
 | `?passive=1` | Lets the resting shield block blades too. |
