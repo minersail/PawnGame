@@ -31,6 +31,11 @@
     image-rendering: pixelated; image-rendering: crisp-edges; cursor: grab; outline: none;
   }
   #view:active { cursor: grabbing; }
+  /* soft frame that fades the board into the background at the screen edges, hiding the patch edge */
+  .frame {
+    position: fixed; inset: 0; pointer-events: none;
+    background: radial-gradient(ellipse 75% 70% at 50% 52%, transparent 62%, color-mix(in srgb, var(--bg) 70%, transparent) 88%, var(--bg) 100%);
+  }
   .hud {
     position: fixed; pointer-events: none; display: flex; flex-direction: column; gap: 4px;
   }
@@ -70,7 +75,7 @@
     font: 400 14px var(--font-display); letter-spacing: 0.08em; color: var(--ink); text-align: center;
   }
   .controls {
-    position: fixed; display: none; pointer-events: none; align-items: flex-end; justify-content: space-between; gap: 12px;
+    position: fixed; display: flex; pointer-events: none; align-items: flex-end; justify-content: space-between; gap: 12px;
     left: max(16px, env(safe-area-inset-left, 0px)); right: max(16px, env(safe-area-inset-right, 0px));
     bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
   }
@@ -79,32 +84,35 @@
     background: color-mix(in srgb, var(--slate) 80%, transparent); color: var(--ink);
     font: 400 13px var(--font-display); letter-spacing: 0.04em; touch-action: none; cursor: pointer;
   }
-  .controls .shield { min-width: 96px; height: 76px; pointer-events: auto; }
-  .controls .shield.on { background: var(--slate-hi); border-color: var(--ink); }
+  .controls .mode { min-width: 104px; height: 76px; pointer-events: auto; }
+  .controls .mode.on { background: var(--slate-hi); border-color: var(--ink); }
+  .controls .zoom { min-width: 88px; height: 48px; pointer-events: auto; }
   .touch-hint { color: var(--ink-dim); font-size: 11px; line-height: 1.5; pointer-events: none; }
   .controls button:active { background: var(--slate-hi); }
   .controls button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
   @media (pointer: coarse) {
-    .controls { display: flex; }
     .keys { display: none; }
+  }
+  @media (pointer: fine) {
+    .touch-hint { display: none; }
+    .controls .mode { height: 48px; }
   }
 </style>
 </head>
 <body>
 
-<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; A and D swing the sword; Space dashes; S plus A or D parries; Z zooms out."></canvas>
+<canvas id="view" tabindex="0" aria-label="Pawn on an endless chessboard. W or up arrow hops forward; W A S D move or turn toward that screen direction; F switches sword and shield; Space dashes; Z zooms out."></canvas>
 
+<div class="frame" aria-hidden="true"></div>
 <div class="hud top">
   <h1>Endless Board</h1>
   <div class="keys">
-    <div><kbd>W</kbd> or <kbd>↑</kbd>: hop forward (hold to keep going)</div>
-    <div><kbd>Space</kbd> or <kbd>Shift</kbd>+<kbd>W</kbd>: dash two squares</div>
-    <div><kbd>A</kbd> <kbd>D</kbd> or <kbd>←</kbd> <kbd>→</kbd>: swing left / right</div>
-    <div>Hold <kbd>S</kbd> or <kbd>Shift</kbd> + <kbd>A</kbd> <kbd>D</kbd> (or <kbd>Q</kbd> <kbd>E</kbd>): parry left / right</div>
-    <div><kbd>Z</kbd>: zoom out (any move zooms back in)</div>
-    <div><kbd>R</kbd>: restart after you're cut down</div>
-    <div>Drag: orbit · double-click: reset · scroll: zoom</div>
-  </div>
+    <div><kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> or arrows: go or face that way on screen</div>
+    <div>Ahead hops (hold to keep going) · a side swings and turns</div>
+    <div><kbd>F</kbd>: sword / shield mode (sideways swings or parries) · hold <kbd>Shift</kbd>: the other one</div>
+    <div><kbd>Space</kbd>: dash (alone, or held with ahead)</div>
+    <div><kbd>Z</kbd>: zoom out · scroll: zoom · <kbd>R</kbd>: restart</div>
+</div>
 </div>
 <div class="hud corner">
   <span class="label">Square</span>
@@ -124,8 +132,9 @@
 <div id="status">Baking splats…</div>
 
 <div class="controls">
-  <div class="touch-hint">Swipe ↑ hop · long ↑ dash · ← → swing · ↓ zoom out<br>Hold Shield + swipe ← → to parry</div>
-  <button type="button" id="shield" class="shield" aria-label="Hold to parry with the next swipe left or right">Shield</button>
+  <button type="button" id="zoom" class="zoom" aria-label="Zoom out until your next move">Zoom out</button>
+  <div class="touch-hint">Swipe where to go or face · long swipe ahead dashes<br>Tap Sword / Shield to switch what a sideways swipe does</div>
+  <button type="button" id="mode" class="mode" aria-pressed="false" aria-label="Sideways swipes swing the sword; tap to switch to shield parries. You can swipe from this button too.">Sword</button>
 </div>
 
 <script src="ink/dist/ink-studio.bake.js"></script>

@@ -21,19 +21,21 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 
 ## Controls
 
-| Action | Keyboard | Touch |
-| --- | --- | --- |
-| Hop forward one square (hold to keep hopping) | W or ↑ | Short swipe up |
-| Dash two squares forward | Space, or Shift + W | Long swipe up |
-| Swing left / right | A / D or ← / → | Swipe left / right |
-| Parry left / right | Hold S or Shift + A / D, or Q / E | Hold **Shield** + swipe left / right |
-| Zoom out (until the next move) | Z | Swipe down |
-| Restart after being cut down | R | Restart |
-| Orbit the camera | Drag | |
-| Reset the camera | Double-click | |
-| Zoom | Scroll | |
+Controls are screen directions: you point where you want to go or face, and the pawn makes the one legal move toward it. It only ever moves forward, and it only turns by swinging or parrying a quarter turn.
 
-On touch screens the board takes swipes, and the only button is **Shield**. A swipe up longer than a fifth of the screen height (at least 90 px) is a dash.
+| You point | The pawn | Keyboard | Touch |
+| --- | --- | --- | --- |
+| The way it faces | Hops one square (hold to keep hopping) | W A S D or arrows | Swipe |
+| The way it faces, dashing | Dashes two squares | Space held with the direction, or Space alone | Long swipe |
+| A side, in sword mode | Swings that way and ends facing it | W A S D or arrows | Swipe |
+| A side, in shield mode | Parries that way and ends facing it | W A S D or arrows | Swipe |
+| | Switch sword / shield mode | F (or hold Shift for one move in the other mode) | Tap **Sword / Shield** |
+| Behind it | Nothing (placeholder; `?behind=double` makes it two swings, turning round) | | |
+| | Zoom out until the next move (again to zoom back) | Z or **Zoom out** | **Zoom out** (or pinch in) |
+| | Restart after being cut down | R | Restart |
+| | Zoom | Scroll (double-click resets) | |
+
+The camera is turned 20°, so each direction snaps to the board direction nearest to it on screen. A swipe counts as long past a fifth of the screen's short side (at least 90 px). Swipes that start on the Sword / Shield button count too, so you can swipe from it; a tap toggles it.
 
 A swing sweeps the blade from about 100° on one side of the pawn's facing to 100° on the other, covering both front diagonals. The pawn ends it facing a quarter turn toward the swing, and hops then go in that direction. A swing pressed during a hop runs after the landing. An enemy on the square ahead blocks a hop.
 
@@ -80,7 +82,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 
 - **Shared copies.** `createSplatInstances` shares the two baked squares across a 14×14 patch of copies centred on the pawn. A copy that falls off one side of the patch moves to the other.
 - **Colours stay right.** The patch is even-sized, so a moved square keeps its colour.
-- **Hidden edge.** The isometric view never reaches the patch edge. With `?cam=persp`, fog fades it into the background. Fog is off in the isometric view because, under an orthographic camera, it formed horizontal dither bands that looked like board seams.
+- **Patch size.** The patch is sized at start to cover the ground in view at the default zoom, between 14 and 30 squares across. Portrait phones hit the cap. A soft frame on the page fades the screen edges into the background, hiding the patch edge when zoomed out. There is no fog: under an orthographic camera it formed horizontal dither bands that looked like board seams.
 - **Precision.** Render coordinates are rebased by an even number of squares whenever the pawn is more than 32 squares from the origin, so they stay small however far it walks.
 
 ### Animation
@@ -91,7 +93,8 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Parry.** `parryPose(u, side)` is a wide bash, like swinging a door open. The shield cocks back across the body, then sweeps out about 80° (`PARRY_ARC`) round the front to the parry side, its face turning ahead of the arc on its own axis (`face`). It holds there braced, then the body takes a quarter turn and the shield settles in front again. The sword drops back out of the way. Only the bash and hold parry, from about 0.1 to 0.42 s into the 0.7 s move.
 - **Sword.** The sword is a child part of the pawn. At rest it is held upright in front of the pawn, slightly right of centre.
 - **Shield.** An ivory heater shield (a flat-topped outline curving to a point, extruded, with a raised lighter inner panel that leaves a darker rim) is a child part of the pawn, held directly in front of the pawn at rest, over the sword. It is baked away from the pawn (`SHIELD_BAKE`) so it picks up no baked shadow. During a swing it tucks round to the side the swing ends on, so the blade clears it.
-- **Camera.** The camera is isometric: an orthographic projection about 35° down (pitch 0.615), straight behind the pawn's facing, easing round as it turns. `?cam=persp` brings back the earlier perspective camera with its 3/4 offset.
+- **Camera.** The camera is fixed to the world and orthographic. It follows the pawn's position but never turns with it. Jordan's picks: yaw 20° (the board turned on screen), pitch 35° down, and the earlier isometric zoom (about 2.25 squares each way along the screen's short axis).
+- **Art grid.** The art grid's height follows the zoom at 24 art pixels per world unit, so squares keep their pixel size. Below about 20 the renderer drops splats and the board breaks up into strips. Zooming out is capped to keep the grid at 720 px or less.
 
 ### Lighting
 
@@ -102,7 +105,7 @@ The `c*` values are the symmetric 3×3 covariance. `packedRGB` decodes as `r = v
 - **Pool.** Up to five of a six-pawn pool (rig parts `e0`, `e1`, …) are active at once.
 - **Spawning.** A new one spawns every 1.2–3.2 s, six squares out on a random side, facing in. It drops from above and lands with the hop squash.
 - **Movement.** It hops forward at random intervals of 0.4–2.8 s and waits when the next square is taken.
-- **Despawning.** It disappears in the fog once it is more than 11 squares from the player.
+- **Despawning.** It disappears once it is more than 11 squares from the player. On a large view that can happen on screen.
 
 ### Enemy attacks
 
@@ -139,13 +142,15 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | --- | --- |
 | `?light=baked` | Turns off live lighting. |
 | `?enemies=3` | Sets the enemy pool size. |
-| `?w=16` | Sets the board patch size (keep it even). |
+| `?w=16` | Sets the board patch size (keep it even). By default it is sized to the view. |
+| `?yaw=20&pitch=35&zoom=2.25` | Camera: board rotation on screen and pitch down, both in degrees; zoom in squares each way along the short screen axis. |
+| `?art=168` | Sets the art grid's height directly. |
+| `?behind=double` | A direction straight behind the pawn makes two swings, turning it round. |
 | `?slow=8` | Plays everything 8× slower. |
 | `?hop=1&dash=0.45&swing=0.7&parry=0.55` | Sets the length of each move in seconds, for feel testing. |
 | `?windup=0.5` | Sets the enemy wind-up in seconds. |
 | `?passive=1` | Lets the resting shield block blades too. |
 | `?eside=-1` | Makes enemies swing from their left instead of their right. |
-| `?cam=persp` | Uses the earlier perspective camera instead of the isometric one. |
 | `?hp=3&invuln=1` | Sets the player's hit points and the invulnerable time after a hit. |
 
 ### Testing hooks
@@ -153,7 +158,7 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 - **Clock.** Setting `window.__clock` (seconds) replaces the real clock, so a test can step frames to exact times.
 - **State.** `window.__endless` exposes game state (including `hp` and `dead`), and `window.__enemies` the enemy pool.
 - **Frame counter.** `window.__frames` counts frames.
-- **Swipes.** `window.__swipe(dx, dy)` performs a touch swipe in pixels (negative dy is up).
+- **Swipes.** `window.__swipe(dx, dy, shield)` performs a touch swipe in pixels (negative dy is up). Pass `shield` to override the sword / shield mode for that swipe.
 - **Software rendering.** Headless Chromium with SwiftShader renders at about 1–2 fps, so tests step the clock instead of relying on real time.
 
 ## Offline scenes

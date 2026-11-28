@@ -12,7 +12,7 @@ const PALETTE = [0x0b0d14, 0x3a2f2a, 0x7a634f, 0xb89c7c, 0xe2cfae, 0xfff4dc,
   0x120d0e, 0x241a1a, 0x3b2c29, 0x5a4540, 0x7e655b];
 const num = (name, fallback) => Number(params.get(name)) || fallback;   // ?name=value overrides, for feel testing
 const SQ = 1.3;          // square size, as in hop.js
-const WINDOW = num('w', 14); // squares kept around the pawn (even)
+// WINDOW (squares kept around the pawn, even) is sized to the view at start; ?w= overrides it
 const HOP = num('hop', 1.0);       // seconds per hop, as in hop.js
 const SWING = num('swing', 0.7);   // seconds per swing
 // Dash and shield. Every value marked PLACEHOLDER is a stand-in until the design decides it.
@@ -25,7 +25,7 @@ const PASSIVE_BLOCK = params.get('passive') === '1';   // PLACEHOLDER: the resti
 const SHIELD_REST = { sweep: 0, y: 0.62, r: 0.44 };     // at rest: directly in front of the pawn, over the sword
 const SHIELD_GUARD = { y: 0.74, r: 0.52 };               // raised and pushed out during a parry
 const SHIELD_TUCK = { sweep: 1.7, y: 0.5, r: 0.34 };     // out of the blade's way during a swing (sweep is x side)
-const ZOOM_OUT = 1.6;              // swipe down / Z: the camera pulls back this much until the next control
+const ZOOM_OUT = 1.6;              // zoom-out button / Z: the camera pulls back this much until the next control
 const SHIELD_BAKE = [-24, 0.6, 40];                      // baked away from the pawn so it picks up no baked shadow
 const SHIELD_R = [0.2, 0.24, 0.032];                     // shield ellipsoid radii (faces -z when baked)
 // Enemy attacks and health. PLACEHOLDER values wait on design.
@@ -39,19 +39,25 @@ const TRADE_HITS = 'both';               // PLACEHOLDER: when both blades land i
 const INVULN = num('invuln', 1.0);       // PLACEHOLDER: seconds of invulnerability after the player is hit
 const BLADE_R = 0.05;                    // blade half-thickness for contact tests
 const CHAIN_AT = 0.9;    // a held key starts the next hop once the landing has mostly settled
-const ART_HEIGHT = 168;  // art pixels down the screen
+// Art pixels per world unit. The art grid's height follows the zoom so squares keep the same pixel size: below about
+// 20 the renderer drops splats and the board breaks up. ?art= sets the grid height directly.
+const ART_DENSITY = 24;
 const HAND = [0.1, 0.55, -0.32];   // sword grip at rest: in front of the pawn (pawn faces -z), blade straight up
 const BLADE = [0.14, 1.36];      // blade runs from just above the grip to the tip, along the sword's local +y
 const ENEMIES = Number(params.get('enemies')) || 6;   // enemy pool size
 const SPAWN_DIST = 6;            // enemies drop in this many squares away
-const DESPAWN_DIST = 11;         // and vanish (inside the fog) past this
+const DESPAWN_DIST = 11;         // and vanish past this
 const SLOW = Number(params.get('slow')) || 1;          // ?slow=8 plays everything 8x slower, for inspection
 const LIVE_LIGHT = params.get('light') !== 'baked';
-// Camera: isometric by default (orthographic, ~35° down, straight behind the pawn's facing). ?cam=persp restores the
-// earlier perspective view (3/4 offset, lower pitch).
-const PERSP = params.get('cam') === 'persp';
-const CAM = PERSP ? { projection: 'perspective', pitch: 0.38, dist: 7.5, yaw: 0.5 }
-  : { projection: 'orthographic', pitch: 0.615, dist: 8.5, yaw: 0 };
+// Camera: fixed to the world and orthographic. It follows the pawn but never turns with it. Jordan's picks: yaw 20°
+// (the board turned on screen), pitch 35° down, and the earlier iso zoom (about 2.25 squares each way along the
+// screen's short axis). ?yaw= ?pitch= (degrees) and ?zoom= (squares) override them.
+const DEG = Math.PI / 180;
+const ORTHO_TAN = Math.tan(19 * DEG);   // tan of half ink-studio's default 38° field of view
+const CAM = { yaw: num('yaw', 20) * DEG, pitch: num('pitch', 35) * DEG, zoom: num('zoom', 2.25) };
+// What a swipe straight back (away from the pawn's facing) does. PLACEHOLDER: nothing; ?behind=double makes it two
+// swings back to back, turning the pawn round.
+const BEHIND = params.get('behind') === 'double' ? 'double' : 'none';
 
 const canvas = document.getElementById('view');
 const status = document.getElementById('status');
@@ -181,13 +187,11 @@ function bakeWorld() {
   rig.part('pawncut');   // the player's top half, when the last hit point goes   // the half a sword hit slices off, filled in on a hit
 
   const world = B.finish({
-    cam: { target: [0, 0.6, 0], dist: CAM.dist, pitch: CAM.pitch, yaw: CAM.yaw, projection: CAM.projection },
+    cam: { target: [0, 0.6, 0], dist: 8, pitch: CAM.pitch, yaw: CAM.yaw, projection: 'orthographic' },
     detail: 14, dither: 0.2, radius: 11
   });
-  // Fade distant squares into the background so the board's edge is never seen. Perspective only: with the
-  // orthographic camera fog depth varies only with screen height, so each palette step became a horizontal dither
-  // band that read as board seams; the iso view never reaches the patch edge (about ±7.3 of 9.1 at full zoom-out).
-  if (PERSP) world.fog = { c: 0, start: 0.42, max: 1 };
+  // No fog: under an orthographic camera it forms horizontal dither bands that read as board seams. The board
+  // patch is sized to the view instead, and a soft frame on the page hides its edge when zoomed out.
   const sun = { dir: S.sun, amb: S.amb, sky: S.sky, k: S.sunK, parts: ['pawn', 'sword', 'shield'], keep: Infinity };
   return { world, rig, capture, sun };
 }
@@ -330,7 +334,7 @@ const state = {
   origin: [0, 0],    // render origin square; kept near the pawn so coordinates stay small
   phi: 0,            // facing: the pawn looks along facingVec(phi); quarter turns only
   act: null,         // { kind: 'hop' | 'dash', dir, t0 } or { kind: 'swing' | 'parry', side, t0 }
-  orbit: 0, pitch: CAM.pitch, dist: CAM.dist, yaw: CAM.yaw, zoomOut: false, camDist: CAM.dist,
+  zoomScale: 1, zoomOut: false, camZoom: 1,   // wheel zoom; the button / Z / pinch zoom-out; the eased value in use
   target: [0, 0.6, 0],
   taken: 0,
   nextSpawn: 1.5,
@@ -339,8 +343,26 @@ const state = {
   dead: null          // the cut, once the last hit point is gone
 };
 window.__endless = state; // for tests
-const held = new Set();   // sources holding "forward"
-let queued = null;         // { kind, side } waiting for the current action to finish
+const held = new Map();   // held direction keys -> screen direction (0 up, 1 left, 2 down, 3 right)
+let queued = null;         // { kind: 'dir', sdir, dash, shield } or { kind, side }, waiting for the current action
+let followUp = null;       // a second move to run straight after (two swings for BEHIND = 'double')
+
+// Screen direction (0 up, 1 left, 2 down, 3 right) -> the board direction nearest to it as seen on screen
+function boardDir(sdir) {
+  const [x, z] = facingVec(CAM.yaw + sdir * Math.PI / 2);
+  return Math.abs(x) > Math.abs(z) ? [Math.sign(x), 0] : [0, Math.sign(z)];
+}
+const facingDir = phi => { const [x, z] = facingVec(phi); return [Math.round(x), Math.round(z)]; };
+const same = (a, b) => a[0] === b[0] && a[1] === b[1];
+// The one legal move toward a screen direction: forward hops or dashes, a side swings or parries that way
+function moveToward({ sdir, dash, shield }) {
+  const d = boardDir(sdir);
+  if (same(d, facingDir(state.phi))) return { kind: dash ? 'dash' : 'hop' };
+  if (same(d, facingDir(state.phi + Math.PI / 2))) return { kind: shield ? 'parry' : 'swing', side: 1 };
+  if (same(d, facingDir(state.phi - Math.PI / 2))) return { kind: shield ? 'parry' : 'swing', side: -1 };
+  if (BEHIND === 'double') { followUp = { kind: 'swing', side: 1 }; return { kind: 'swing', side: 1 }; }
+  return null;
+}
 
 // Enemies: { i, mode: 'off' | 'drop' | 'idle' | 'hop' | 'swing' | 'dying', sq, dir, t0, wait, cut, struck, blocked }
 const enemies = Array.from({ length: ENEMIES }, (_, i) => ({ i, mode: 'off', sq: [0, 0], dir: [0, -1], t0: 0, wait: 0, dirty: true }));
@@ -414,6 +436,9 @@ function stepEnemies(now) {
   }
 }
 
+// A held direction key that points the way the pawn faces keeps it hopping
+const heldForward = () => [...held.values()].some(sdir => same(boardDir(sdir), facingDir(state.phi)));
+
 function step(now) {
   if (state.restartPending) {
     state.restartPending = false;
@@ -425,7 +450,7 @@ function step(now) {
   const a = state.act;
   if (a) {
     const u = (now - a.t0) / DURATION[a.kind];
-    const chain = a.kind === 'hop' && u >= CHAIN_AT && (held.size || queued);
+    const chain = a.kind === 'hop' && u >= CHAIN_AT && (heldForward() || queued);
     if (u >= 1 || chain) {
       if (a.kind === 'hop') { state.sq[0] += a.dir[0]; state.sq[1] += a.dir[1]; }
       else if (a.kind === 'dash') { state.sq[0] += DASH_SQUARES * a.dir[0]; state.sq[1] += DASH_SQUARES * a.dir[1]; }
@@ -433,10 +458,11 @@ function step(now) {
       state.act = null;
     }
   }
-  if (state.dead) { state.act = null; queued = null; }
+  if (state.dead) { state.act = null; queued = null; followUp = null; }
   if (!state.act && !state.dead) {
-    const next = queued ?? (held.size ? { kind: 'hop' } : null);
-    queued = null;
+    let next = followUp ?? queued ?? (heldForward() ? { kind: 'hop' } : null);
+    if (followUp) followUp = null; else queued = null;
+    if (next?.kind === 'dir') next = moveToward(next);
     if (next?.kind === 'hop' || next?.kind === 'dash') {
       const [fx, fz] = facingVec(state.phi), dir = [Math.round(fx), Math.round(fz)];
       // An enemy standing on a square the move passes through blocks it
@@ -675,82 +701,121 @@ document.getElementById('restart').addEventListener('click', restart);
 
 // Any control brings the camera back from the zoomed-out view
 const press = (kind, side = 0) => { state.zoomOut = false; queued = { kind, side }; };
+const pressDir = (sdir, dash, shield) => { state.zoomOut = false; queued = { kind: 'dir', sdir, dash, shield }; };
 const zoomOut = () => { state.zoomOut = true; };
 
-// Keyboard. Hold S or Shift to turn A / D into parries (Q / E parry directly); Space or Shift + W dashes.
-const mods = new Set();
+// Keyboard: W A S D or the arrows are screen directions. F toggles sword / shield mode, and holding Shift uses the
+// other mode for one move;
+// hold Space while pressing forward to dash, or tap Space alone to dash the way the pawn faces. Z zooms out.
+const SDIR = { KeyW: 0, ArrowUp: 0, KeyA: 1, ArrowLeft: 1, KeyS: 2, ArrowDown: 2, KeyD: 3, ArrowRight: 3 };
+let spaceHeld = false, spaceUsed = false;
 addEventListener('keydown', e => {
   if (e.code === 'KeyR' && !e.repeat) { restart(); return; }
-  if (e.code === 'KeyS' || e.code === 'ArrowDown') { mods.add(e.code); e.preventDefault(); return; }
-  if (e.repeat && !['KeyW', 'ArrowUp'].includes(e.code)) return;
-  const guard = e.shiftKey || mods.size > 0;
-  const act = {
-    KeyW: e.shiftKey ? ['dash'] : ['hop'], ArrowUp: e.shiftKey ? ['dash'] : ['hop'], Space: ['dash'],
-    KeyA: [guard ? 'parry' : 'swing', 1], ArrowLeft: [guard ? 'parry' : 'swing', 1],
-    KeyD: [guard ? 'parry' : 'swing', -1], ArrowRight: [guard ? 'parry' : 'swing', -1],
-    KeyQ: ['parry', 1], KeyE: ['parry', -1], KeyZ: ['zoom']
-  }[e.code];
-  if (!act || (e.repeat && act[0] !== 'hop')) return;
+  if (e.code === 'KeyZ' && !e.repeat) { if (state.zoomOut) state.zoomOut = false; else zoomOut(); return; }
+  if (e.code === 'KeyF' && !e.repeat) { setMode(!state.shieldMode); return; }
+  if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) { spaceHeld = true; spaceUsed = false; } return; }
+  const sdir = SDIR[e.code];
+  if (sdir === undefined) return;
   e.preventDefault();
-  if (act[0] === 'zoom') return zoomOut();
-  if (act[0] === 'hop') { state.zoomOut = false; held.add(e.code); return; }   // held: keep hopping
-  press(...act);
+  if (e.repeat) return;
+  held.set(e.code, sdir);
+  if (spaceHeld) spaceUsed = true;
+  pressDir(sdir, spaceHeld, state.shieldMode !== e.shiftKey);   // Shift held uses the other mode for this move
 });
-addEventListener('keyup', e => { held.delete(e.code); mods.delete(e.code); });
-addEventListener('blur', () => { held.clear(); mods.clear(); });
+addEventListener('keyup', e => {
+  held.delete(e.code);
+  if (e.code === 'Space') { if (spaceHeld && !spaceUsed) press('dash'); spaceHeld = false; }
+});
+addEventListener('blur', () => { held.clear(); spaceHeld = false; });
 
-// Touch: swipes on the board. Up hops (a long swipe dashes), left / right swings (or parries while the Shield
-// button is held), down zooms out until the next control.
-const SWIPE_MIN = 24;                                       // px: shorter is a tap, ignored
-const swipeLong = () => Math.max(90, 0.2 * innerHeight);    // PLACEHOLDER: px past which a swipe up is a dash
-const shieldBtn = document.getElementById('shield');
-let shieldHeld = false;
-shieldBtn.addEventListener('pointerdown', e => { e.preventDefault(); shieldHeld = true; shieldBtn.setPointerCapture?.(e.pointerId); shieldBtn.classList.add('on'); });
-for (const ev of ['pointerup', 'pointercancel', 'lostpointercapture'])
-  shieldBtn.addEventListener(ev, () => { shieldHeld = false; shieldBtn.classList.remove('on'); });
-const swipes = new Map();
-function swipe(dx, dy) {
+// Touch: swipe the way you want to go or face; a long swipe ahead dashes. The Sword / Shield button toggles what a
+// sideways swipe does (swing or parry); swipes that start on the button count too. The zoom-out button pulls the
+// camera back until the next move.
+const SWIPE_MIN = 24;                                       // px: shorter is a tap
+const swipeLong = () => Math.max(90, 0.2 * Math.min(innerWidth, innerHeight));   // PLACEHOLDER: px for a dash
+const modeBtn = document.getElementById('mode'), zoomBtn = document.getElementById('zoom');
+state.shieldMode = false;
+function setMode(shield) {
+  state.shieldMode = shield;
+  modeBtn.textContent = shield ? 'Shield' : 'Sword';
+  modeBtn.classList.toggle('on', shield);
+  modeBtn.setAttribute('aria-pressed', String(shield));
+}
+function swipe(dx, dy, shield = state.shieldMode) {
   const len = Math.hypot(dx, dy);
-  if (len < SWIPE_MIN) return;
-  if (Math.abs(dy) >= Math.abs(dx)) {
-    if (dy < 0) press(-dy >= swipeLong() ? 'dash' : 'hop');
-    else zoomOut();
-  } else press(shieldHeld ? 'parry' : 'swing', dx < 0 ? 1 : -1);
+  if (len < SWIPE_MIN) return false;
+  const sdir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 1 : 3) : (dy < 0 ? 0 : 2);
+  pressDir(sdir, len >= swipeLong(), shield);
+  return true;
 }
 window.__swipe = swipe; // for tests
+let modeTouch = null;
+modeBtn.addEventListener('pointerdown', e => { e.preventDefault(); modeBtn.setPointerCapture?.(e.pointerId); modeTouch = { x: e.clientX, y: e.clientY }; });
+modeBtn.addEventListener('pointerup', e => {
+  if (!modeTouch) return;
+  const t = modeTouch; modeTouch = null;
+  if (!swipe(e.clientX - t.x, e.clientY - t.y)) setMode(!state.shieldMode);   // a tap toggles; a swipe moves
+});
+modeBtn.addEventListener('pointercancel', () => { modeTouch = null; });
+modeBtn.addEventListener('click', e => { if (e.detail === 0) setMode(!state.shieldMode); });   // keyboard activation
+zoomBtn.addEventListener('click', () => { if (state.zoomOut) state.zoomOut = false; else zoomOut(); });
 
-// Drag on the board to orbit the camera around the pawn; it stays where you leave it
-let drag = null;
+const touches = new Map();   // pointerId -> { x, y, x0, y0 }
+let pinch = null;            // starting distance between two fingers
 canvas.addEventListener('pointerdown', e => {
+  if (e.pointerType === 'mouse') return;
   canvas.setPointerCapture(e.pointerId);
-  if (e.pointerType === 'mouse') drag = { x: e.clientX, y: e.clientY, orbit: state.orbit, pitch: state.pitch };
-  else swipes.set(e.pointerId, { x: e.clientX, y: e.clientY });
+  touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
+  if (touches.size === 2) { const [a, b] = [...touches.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); }
 });
-canvas.addEventListener('pointerup', e => {
-  const s = swipes.get(e.pointerId);
-  if (s) { swipes.delete(e.pointerId); swipe(e.clientX - s.x, e.clientY - s.y); }
-});
-canvas.addEventListener('pointercancel', e => swipes.delete(e.pointerId));
 canvas.addEventListener('pointermove', e => {
-  if (!drag) return;
-  const k = 4 / Math.max(innerWidth, 1);
-  state.orbit = drag.orbit - (e.clientX - drag.x) * k;
-  state.pitch = Math.min(PERSP ? 0.9 : 1.2, Math.max(PERSP ? 0.18 : 0.3, drag.pitch + (e.clientY - drag.y) * k));
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  t.x = e.clientX; t.y = e.clientY;
+  if (pinch && touches.size === 2) {
+    const [a, b] = [...touches.values()], d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (d < 0.7 * pinch) zoomOut();
+    else if (d > 1.3 * pinch) state.zoomOut = false;
+  }
 });
-const endDrag = () => { drag = null; };
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
-canvas.addEventListener('dblclick', () => { state.orbit = 0; state.pitch = CAM.pitch; state.dist = CAM.dist; });
+const lift = e => {
+  const t = touches.get(e.pointerId);
+  if (!t) return;
+  touches.delete(e.pointerId);
+  if (pinch) { if (!touches.size) pinch = null; return; }   // fingers of a pinch don't swipe
+  if (e.type === 'pointerup') swipe(t.x - t.x0, t.y - t.y0);
+};
+canvas.addEventListener('pointerup', lift);
+canvas.addEventListener('pointercancel', lift);
+canvas.addEventListener('dblclick', () => { state.zoomScale = 1; });
 canvas.addEventListener('wheel', e => {
-  state.dist = Math.min(12, Math.max(4.5, state.dist * Math.exp(e.deltaY * 0.001)));
+  state.zoomScale = Math.min(2, Math.max(0.6, state.zoomScale * Math.exp(e.deltaY * 0.001)));
   e.preventDefault();
 }, { passive: false });
 
 // ---------- run ----------
 
+// Half the view's height in world units, for the camera's zoom (squares each way on the short axis)
+function viewHalfHeight(width, height) {
+  const half = CAM.zoom * SQ, aspect = width / height;
+  return aspect >= 1 ? half : half / aspect;
+}
+// Board patch size: enough squares to cover the ground in view at the default zoom (capped for speed)
+function windowSize() {
+  if (params.get('w')) return Number(params.get('w'));
+  const { width, height } = artSize(), h = viewHalfHeight(width, height);
+  const across = h * width / height, up = h / Math.sin(CAM.pitch);        // ground half-extents, screen x and y
+  const c = Math.abs(Math.cos(CAM.yaw)), sn = Math.abs(Math.sin(CAM.yaw));
+  const ext = Math.max(c * across + sn * up, sn * across + c * up);
+  return Math.min(30, Math.max(14, 2 * Math.ceil(ext / SQ) + 2));
+}
+
 function artSize() {
   const aspect = Math.max(0.5, Math.min(2.6, innerWidth / Math.max(1, innerHeight)));
-  return { width: Math.round(ART_HEIGHT * aspect), height: ART_HEIGHT };
+  // view half-height in world units, including scroll zoom and zoom-out; rounded to 8 px so easing resizes rarely
+  const half = (aspect >= 1 ? CAM.zoom * SQ : CAM.zoom * SQ / aspect) * (state.camZoom ?? 1);
+  const height = num('art', 8 * Math.round(Math.min(720, Math.max(168, 2 * half * ART_DENSITY)) / 8));
+  return { width: Math.round(height * aspect), height };
 }
 
 function start() {
@@ -759,6 +824,8 @@ function start() {
   const dark = bakeSquare({ r: [6, 7, 8] }, 22);
   const { world, rig, capture, sun } = bakeWorld();
 
+  const WINDOW = windowSize();
+  state.window = WINDOW;
   const placements = [], slots = [];
   for (let i = 0; i < WINDOW; i++)
     for (let j = 0; j < WINDOW; j++) {
@@ -858,23 +925,26 @@ function start() {
     }
     if (moved.length) board.updateTransforms(moved);
 
-    // Third-person camera: behind the pawn's facing (CAM.yaw offset), easing round as it turns
-    const goalYaw = p.phi + CAM.yaw + state.orbit;
-    state.yaw += (goalYaw - state.yaw) * (1 - Math.exp(-dt * 6));
-    const [fx, fz] = facingVec(p.phi);
-    const goal = [p.x + fx * 0.6, 0.6, p.z + fz * 0.6];
+    // Fixed camera: follows the pawn's position, never its turns
+    const goal = [p.x, 0.6, p.z];
     const follow = 1 - Math.exp(-dt * 4);
-    const goalDist = state.zoomOut ? Math.min(13.5, state.dist * ZOOM_OUT) : state.dist;
-    state.camDist += (goalDist - state.camDist) * (1 - Math.exp(-dt * 5));
     for (const i of [0, 1, 2]) state.target[i] += (goal[i] - state.target[i]) * follow;
+    // zooming out is limited so the art grid (max 720 px) keeps at least 20 art pixels per world unit
+    const aspect = Math.max(0.5, Math.min(2.6, innerWidth / Math.max(1, innerHeight)));
+    const half0 = aspect >= 1 ? CAM.zoom * SQ : CAM.zoom * SQ / aspect;
+    const goalZoom = Math.min(720 / (2 * half0 * 20), state.zoomScale * (state.zoomOut ? ZOOM_OUT : 1));
+    state.camZoom += (goalZoom - state.camZoom) * (1 - Math.exp(-dt * 5));
 
     world.anim.update(dt, now);
     const { width, height } = artSize();
     renderer.render(world, {
       width, height, time: now, instances: board, changedRows: allRows,
-      camera: { target: state.target, dist: state.camDist * Math.max(1, Math.sqrt(0.9 * height / width)), yaw: state.yaw, pitch: state.pitch, projection: CAM.projection }
+      // the orthographic view's half-height is dist × tan(fov / 2), with ink-studio's default 38° field of view
+      camera: { target: state.target, dist: viewHalfHeight(width, height) * state.camZoom / ORTHO_TAN, yaw: CAM.yaw, pitch: CAM.pitch, projection: 'orthographic' }
     });
     coords.textContent = `${state.sq[0]}, ${-state.sq[1]}`;
+    const zl = state.zoomOut ? 'Zoom in' : 'Zoom out';
+    if (zoomBtn.textContent !== zl) zoomBtn.textContent = zl;
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
