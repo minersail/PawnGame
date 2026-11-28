@@ -44,7 +44,7 @@ A swing sweeps the blade from about 100° on one side of the pawn's facing to 10
 
 A dash covers two squares in one fast, low move, a nod to the pawn's opening move. It costs one of three stamina units (the HUD's ◆). One unit refills every 8 s, and a kill refills one. Dashing with no stamina hops one square instead. A parry bashes the shield out in a wide arc round the front to one side, like swinging a door open, and turns the pawn a quarter turn that way, like a swing. At rest the shield is held directly in front of the pawn, over the sword. Zooming out pulls the camera back 1.6× until the next move.
 
-Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield during a parry's beat is parried: the enemy staggers back, its blade springs away, and it is stunned for 1 s (`?stun=`): it can't move or swing, and yellow orbs circle its head. A block by the resting shield (`?passive=1`) does not stun (placeholder). The resting shield does not block (`?passive=1` makes it block). A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
+Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings toward the side the player is on: a left swing covers its front, left diagonal and left, and a right swing the other way. At a player straight ahead it swings left (placeholder). Once it starts, it finishes the swing before it moves again. A blade that meets the shield during a parry's beat is parried: the enemy staggers back, its blade springs away, and it is stunned for 1 s (`?stun=`): it can't move or swing, and yellow orbs circle its head. A block by the resting shield (`?passive=1`) does not stun (placeholder). The resting shield does not block (`?passive=1` makes it block). A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
 
 ## Engine: ink-studio
 
@@ -155,7 +155,7 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 | `?stamina=3&refill=8` | Stamina units, and seconds to refill one. |
 | `?windup=0.5` | Sets the enemy wind-up in seconds. |
 | `?passive=1` | Lets the resting shield block blades too. |
-| `?eside=-1` | Makes enemies swing from their left instead of their right. |
+| `?eside=-1` | Makes enemies swing right instead of left at a player straight ahead. |
 | `?hp=3&invuln=1` | Sets the player's hit points and the invulnerable time after a hit. |
 
 ### Testing hooks

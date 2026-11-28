@@ -46,7 +46,7 @@ const SHIELD_R = [0.2, 0.24, 0.032];                     // shield ellipsoid rad
 // Enemy attacks and health. PLACEHOLDER values wait on design.
 const PLAYER_HP = num('hp', 3);          // PLACEHOLDER: hit points
 const ENEMY_WINDUP = num('windup', 0.5); // PLACEHOLDER: an enemy's wind-up, the tell (the player's is 0.175 s)
-const ENEMY_SWING_SIDE = num('eside', 1); // PLACEHOLDER: enemies always swing left (+1), from their right; ?eside=-1 flips it
+const ENEMY_SWING_SIDE = num('eside', 1); // an enemy swings toward the side the player is on; straight ahead it swings left (+1, PLACEHOLDER; ?eside=-1 flips it)
 const ENEMY_SWING_REST = 0.8;            // PLACEHOLDER: an enemy waits this long after a swing before it may swing again
 const ENEMIES_TURN = false;              // PLACEHOLDER: enemies never turn; they travel and swing along one line
 const ENEMY_FRIENDLY_FIRE = false;       // PLACEHOLDER: enemy blades pass through other enemies
@@ -490,6 +490,20 @@ function playerInFront(e) {
   if (a?.dir) for (let k = 1; k <= (a.kind === 'dash' ? DASH_SQUARES : 1); k++) mine.push(sqKey(state.sq[0] + k * a.dir[0], state.sq[1] + k * a.dir[1]));
   return mine.some(m => front.includes(m));
 }
+// Which way an enemy swings: toward the front diagonal the player is on (a left swing covers front, left diagonal and
+// left), or ENEMY_SWING_SIDE when the player is straight ahead. Where the player stands counts before where it is going.
+function enemySwingSide(e) {
+  const [dx, dz] = e.dir, ahead = [e.sq[0] + dx, e.sq[1] + dz];
+  const left = sqKey(ahead[0] + dz, ahead[1] - dx), right = sqKey(ahead[0] - dz, ahead[1] + dx);
+  const mine = [sqKey(...state.sq)], a = state.act;
+  if (a?.dir) for (let k = 1; k <= (a.kind === 'dash' ? DASH_SQUARES : 1); k++) mine.push(sqKey(state.sq[0] + k * a.dir[0], state.sq[1] + k * a.dir[1]));
+  for (const m of mine) {
+    if (m === sqKey(...ahead)) return ENEMY_SWING_SIDE;
+    if (m === left) return 1;
+    if (m === right) return -1;
+  }
+  return ENEMY_SWING_SIDE;
+}
 
 function stepEnemies(now) {
   if (now >= state.nextSpawn) {
@@ -508,7 +522,7 @@ function stepEnemies(now) {
     // On a square, it swings once the player stands on one of its front three squares; once committed it plays out
     if (e.mode === 'idle' && now < (e.stunUntil ?? 0)) continue;   // stunned: no moves, no swings
     if ((e.mode === 'idle') && !state.dead && now >= (e.rested ?? 0) && playerInFront(e)) {
-      Object.assign(e, { mode: 'swing', t0: now, side: ENEMY_SWING_SIDE, struck: false, blocked: false });
+      Object.assign(e, { mode: 'swing', t0: now, side: enemySwingSide(e), struck: false, blocked: false });
       continue;
     }
     if (e.mode === 'idle' && now - e.t0 >= e.wait) {

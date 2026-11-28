@@ -53,6 +53,13 @@ this.duel = function (ex, ez, move, pressAt) {
     prev = p;
   }
   return '-';
+};
+// An idle enemy on (ex, ez) facing dir, the player standing still: which side does it swing, and does it land?
+this.ambush = function (ex, ez, dir) {
+  state.hp = 99; state.hurtAt = -Infinity; state.dead = null; state.phi = 0; state.sq = [0, 0]; state.act = null; state.nextSpawn = 1e9; queued = null;
+  const e = enemies[0]; Object.assign(e, { mode: 'idle', sq: [ex, ez], dir, t0: 0, wait: 1e9, rested: 0, stunUntil: 0, struck: false, blocked: false });
+  for (let t = 0, prev = 0; t < 1.6; prev = t, t += 1 / 60) { step(t); checkEnemyHits(prev, t, null, null); if (e.struck) break; }
+  return { side: e.side, hit: e.struck };
 };`, ctx);
 const cases = [
   ['swing left alone', ['swing', 1], null, 0],
@@ -78,3 +85,6 @@ for (const [name, move] of [['180 block', ['parry', 1, 2]], ['spin slash', ['swi
     console.log((name + ' vs ' + where).padEnd(34), row);
   }
 }
+// Enemies pick their swing side from where the player is
+for (const [label, ex, ez, dir] of [['player ahead of it', 0, -1, [0, 1]], ['player on its front-left', -1, -1, [0, 1]], ['player on its front-right', 1, -1, [0, 1]]])
+  console.log(('enemy swing, ' + label).padEnd(34), JSON.stringify(ctx.ambush(ex, ez, dir)));
