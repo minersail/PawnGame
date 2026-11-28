@@ -14,6 +14,7 @@ Play it at **https://minersail.github.io/PawnGame/web/** (GitHub Pages serves `m
 | `scenes/pawn.js` | Offline scene: the static pawn on a small ground patch. |
 | `scenes/hop.js` | Offline scene: the pawn hopping across a 3×4 board. The game's hop curve comes from here. |
 | `renders/` | Offline renders of the two scenes, a turntable, the hop clip (GIF, MP4, APNG, contact sheet) and a six-panel pipeline breakdown. |
+| `tools/sim-cancel.js` | Runs swing / parry cancels in Node and reports the largest per-frame jump in each pose channel and the final facing. |
 | `tools/sim-parry.js` | Runs the game's pose and contact maths in Node, without rendering, to check parry timing against an enemy swing in seconds. |
 | `tools/vendor-ink.js` | Copies the ink-studio files the page imports into `web/ink/`. |
 | `tools/dump_stages.js`, `tools/draw_stages.py` | Produce `renders/pipeline-stages.png`. Panels 2–5 use a standalone Python splat projection, not the library renderer. |
@@ -27,21 +28,22 @@ Controls are screen directions: you point where you want to go or face, and the 
 | --- | --- | --- | --- |
 | The way it faces | Hops one square (hold to keep hopping) | W A S D or arrows | Swipe |
 | The way it faces, dashing | Dashes two squares (costs one stamina; with none it hops) | Space held with the direction, or Space alone | Long swipe |
-| A side, in sword mode | Swings that way and ends facing it | W A S D or arrows | Swipe |
-| A side, in shield mode | Parries that way and ends facing it | W A S D or arrows | Swipe |
-| | Switch sword / shield mode | F (or hold Shift for one move in the other mode) | Tap **Sword / Shield** |
+| A side | Swings that way and ends facing it | W A S D or arrows | Swipe starting on the right half of the screen |
+| A side, with the shield | Parries that way and ends facing it | Shift + W A S D or arrows | Swipe starting on the left half of the screen |
 | Behind it | Nothing (placeholder; `?behind=double` makes it two swings, turning round) | | |
 | | Zoom out until the next move (again to zoom back) | Z or **Zoom out** | **Zoom out** (or pinch in) |
 | | Restart after being cut down | R | Restart |
 | | Zoom | Scroll (double-click resets) | |
 
-The camera is turned 20°, so each direction snaps to the board direction nearest to it on screen. A swipe counts as long (a dash) past 35% of the screen's short side, and at least 150 px (`?dashswipe=0.35` sets the fraction). Swipes that start on the Sword / Shield button count too, so you can swipe from it; a tap toggles it.
+The camera is turned 20°, so each direction snaps to the board direction nearest to it on screen. A swipe counts as long (a dash) past 35% of the screen's short side, and at least 150 px (`?dashswipe=0.35` sets the fraction). Forward swipes hop or dash from either half.
+
+Swings and parries cancel into each other. Outside a move's active frames (a swing's slash; a parry's bash and hold), pressing another swing or parry cuts it short. A press during the active frames is buffered for 0.15 s (`?buffer=`) and cancels as soon as the window opens; pressed earlier than that, it waits for the move to end. The new move starts partway into its wind-up, at the frame nearest the current pose, and the sword and shield cross-fade into it over 0.15 s (`?blend=`). This is the cross-fade `K.machine` does, written as a function of the game clock so contact sub-steps can sample any instant; when hits and blocks count comes from the clock, never the blend. The body's turn unwinds over the rest of the new move. Springs (`K.spring`) add follow-through to the sword's tilt and the shield's face when drawn (`?follow=0` turns them off); contact uses the unsprung pose. A cancelled move's quarter turn still counts (placeholder): swing left into parry right ends facing the same way, and left into left turns 180°. Sideways directions are read against the facing before the move during its wind-up, and after it during its recovery.
 
 A swing sweeps the blade from about 100° on one side of the pawn's facing to 100° on the other, covering both front diagonals. The pawn ends it facing a quarter turn toward the swing, and hops then go in that direction. A swing pressed during a hop runs after the landing. A hop or dash is refused if it would land on an enemy's square, or on a square an enemy is hopping into. A dash passes through an enemy on its first square.
 
 A dash covers two squares in one fast, low move, a nod to the pawn's opening move. It costs one of three stamina units (the HUD's ◆). One unit refills every 8 s, and a kill refills one. Dashing with no stamina hops one square instead. A parry bashes the shield out in a wide arc round the front to one side, like swinging a door open, and turns the pawn a quarter turn that way, like a swing. At rest the shield is held directly in front of the pawn, over the sword. Zooming out pulls the camera back 1.6× until the next move.
 
-Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield during a parry's beat is parried: the enemy staggers back and its blade springs away. The resting shield does not block (`?passive=1` makes it block). A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
+Enemies fight back. An enemy that finds the player on the square ahead of it or either front diagonal winds up for 0.5 s (the tell), then swings. Once it starts, it finishes the swing before it moves again. A blade that meets the shield during a parry's beat is parried: the enemy staggers back, its blade springs away, and it is stunned for 1 s (`?stun=`): it can't move or swing, and yellow orbs circle its head. A block by the resting shield (`?passive=1`) does not stun (placeholder). The resting shield does not block (`?passive=1` makes it block). A blade that meets the pawn costs one of three hit points, shown under **Health**. The last one cuts the pawn in two, the same way enemies are cut.
 
 ## Engine: ink-studio
 
@@ -160,7 +162,7 @@ cd web && python3 -m http.server 8080   # open http://localhost:8080
 - **Clock.** Setting `window.__clock` (seconds) replaces the real clock, so a test can step frames to exact times.
 - **State.** `window.__endless` exposes game state (including `hp` and `dead`), and `window.__enemies` the enemy pool.
 - **Frame counter.** `window.__frames` counts frames.
-- **Swipes.** `window.__swipe(dx, dy, shield)` performs a touch swipe in pixels (negative dy is up). Pass `shield` to override the sword / shield mode for that swipe.
+- **Swipes.** `window.__swipe(dx, dy, shield)` performs a touch swipe in pixels (negative dy is up). Pass `shield: true` for a swipe from the left half (a parry).
 - **Software rendering.** Headless Chromium with SwiftShader renders at about 1–2 fps, so tests step the clock instead of relying on real time.
 
 ## Offline scenes

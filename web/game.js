@@ -10,7 +10,8 @@ const params = new URLSearchParams(location.search);
 const PALETTE = [0x0b0d14, 0x3a2f2a, 0x7a634f, 0xb89c7c, 0xe2cfae, 0xfff4dc,
   0x1c2230, 0x2a3448, 0x3a4862, 0x4d5d7c, 0x6a7da0, 0x8a9cc0,
   0x120d0e, 0x241a1a, 0x3b2c29, 0x5a4540, 0x7e655b,
-  0x6e2622, 0xa8443a];   // 17–18: danger-square marks
+  0x6e2622, 0xa8443a,     // 17–18: danger-square marks
+  0xc9a227, 0xf2dc6b];    // 19–20: stun orbs
 const num = (name, fallback) => Number(params.get(name)) || fallback;   // ?name=value overrides, for feel testing
 const SQ = 1.3;          // square size, as in hop.js
 // WINDOW (squares kept around the pawn, even) is sized to the view at start; ?w= overrides it
@@ -27,6 +28,14 @@ const STAMINA_REFILL = num('refill', 8);   // seconds to refill one unit; a kill
 const DANGER_MARKS = params.get('danger') !== '0';   // marks on each enemy's front three squares (?danger=0 hides)
 const PARRY = num('parry', 0.7);   // seconds per parry (window: 0.1–0.42 s in)
 const PARRY_TURNS = true;          // a parry turns the pawn a quarter turn toward its side, like a swing
+// Cancels: a swing or parry can be cancelled into another swing or parry outside its active frames (u ranges below).
+// The new move starts partway in, at the wind-up frame nearest the current pose, and cross-fades from it.
+const ACTIVE = { swing: [0.25, 0.55], parry: [0.15, 0.6] };   // the slash; the shield up (bash and hold)
+const BLEND = num('blend', 0.15);           // seconds of cross-fade into a cancelling move
+const CANCEL_BUFFER = num('buffer', 0.15);  // a press during active frames still cancels if the window opens within this
+// PLACEHOLDER: a cancelled move's quarter turn still counts, so swing left into parry right ends facing the same way,
+// and left into left turns 180°.
+const STUN = num('stun', 1.0);              // seconds an enemy is stunned after its blade meets an active parry
 const PASSIVE_BLOCK = params.get('passive') === '1';   // PLACEHOLDER: the resting shield does not block; only a parry does
 const SHIELD_REST = { sweep: 0, y: 0.62, r: 0.44 };     // at rest: directly in front of the pawn, over the sword
 const SHIELD_GUARD = { y: 0.74, r: 0.52 };               // raised and pushed out during a parry
@@ -111,6 +120,8 @@ const PK = 0.5;
 // Each enemy is baked at its own spot, away from the player and each other: solids in one bake merge,
 // and a neighbour's geometry would darken the baked lighting. The rig moves them from here.
 const EREST = i => [30 + 3 * i, 0, 40];
+const STUN_BAKE = i => [30 + 3 * i, 0, 60];   // stun orbs bake on their own, away from everything
+const STUN_Y = 1.78;                          // orbs circle this high, just above an enemy's head
 const pawnProfile = t => PK * (t < 0.12 ? 0.95 : t < 0.2 ? 0.95 - (t - 0.12) * 2.5
   : t < 0.3 ? 0.75 - (t - 0.2) * 1.2 : 0.63 - Math.pow((t - 0.3) / 0.7, 0.6) * 0.35);
 function sculptPawn(S, ramp, tag, fine, [x, y, z] = [0, 0, 0]) {
@@ -192,6 +203,14 @@ function bakeWorld() {
   for (let i = 0; i < ENEMIES; i++) {
     sculptPawn(S, ebony, `e${i}`, false, EREST(i)); S.bake();
     sculptSword(S, add(EREST(i), HAND), { blade: { r: [13, 14, 15] }, guard: { r: [12, 13, 14] }, grip: { r: [12, 12, 13] }, pommel: { r: [13, 14, 15] } }, `e${i}sword`, 0.022);
+    S.bake();
+  }
+  // Stun orbs: three small yellow balls that circle above a stunned enemy's head; baked far off, carried by the rig
+  for (let i = 0; i < ENEMIES; i++) {
+    for (let k = 0; k < 3; k++) {
+      const a = k * 2 * Math.PI / 3;
+      S.ball(add(STUN_BAKE(i), [0.24 * Math.cos(a), STUN_Y, 0.24 * Math.sin(a)]), 0.055, { r: [19, 20] }, { res: 0.02, tag: `e${i}stun` });
+    }
     S.bake();
   }
   for (let i = 0; i < ENEMIES; i++) rig.part(`e${i}cut`);
@@ -427,7 +446,7 @@ function spawn(now) {
     const across = Math.round(rand(-3, 3));
     const sq = [state.sq[0] + out[0] * SPAWN_DIST + out[1] * across, state.sq[1] + out[1] * SPAWN_DIST + out[0] * across];
     if (taken.has(sqKey(...sq))) continue;
-    Object.assign(e, { mode: 'drop', sq, dir: [-out[0], -out[1]], t0: now, wait: rand(0.6, 2.5), dirty: true });
+    Object.assign(e, { mode: 'drop', sq, dir: [-out[0], -out[1]], t0: now, wait: rand(0.6, 2.5), stunUntil: 0, dirty: true });
     return;
   }
 }
@@ -458,6 +477,7 @@ function stepEnemies(now) {
     }
     if (e.mode === 'swing' && now - e.t0 >= ENEMY_SWING) { e.mode = 'idle'; e.t0 = now; e.wait = rand(0.4, 2.8); e.rested = now + ENEMY_SWING_REST; }
     // On a square, it swings once the player stands on one of its front three squares; once committed it plays out
+    if (e.mode === 'idle' && now < (e.stunUntil ?? 0)) continue;   // stunned: no moves, no swings
     if ((e.mode === 'idle') && !state.dead && now >= (e.rested ?? 0) && playerInFront(e)) {
       Object.assign(e, { mode: 'swing', t0: now, side: ENEMY_SWING_SIDE, struck: false, blocked: false });
       continue;
@@ -469,6 +489,36 @@ function stepEnemies(now) {
     }
     if (e.mode === 'dying' && now - e.t0 >= 1.6) { e.mode = 'off'; e.dirty = true; e.restore = true; }
   }
+}
+
+// Cancel a swing or parry into another, outside its active frames. Directions are read against the facing before
+// the move (in its wind-up) or after it (in its recovery, once the body has visibly turned).
+function cancelInto(now) {
+  const a = state.act;
+  if (!a || !(a.kind === 'swing' || a.kind === 'parry') || !queued || state.dead) return;
+  const u = actU(a, now), [s0, s1] = ACTIVE[a.kind];
+  if (u >= s0 && u < s1) return;                       // active frames can't be cancelled
+  if (now - queued.at > CANCEL_BUFFER) return;         // pressed too early: it runs after the move instead
+  let next = queued;
+  if (next.kind === 'dir') {
+    const phi0 = state.phi;
+    state.phi += u >= s1 ? a.side * Math.PI / 2 : 0;
+    next = moveToward(next);
+    state.phi = phi0; followUp = null;
+  }
+  if (!next || !(next.kind === 'swing' || next.kind === 'parry')) return;   // hops and dashes wait for the move to end
+  const from = sideChannels(a, now), yaw = state.phi + from.turn;
+  state.phi += a.side * Math.PI / 2;                   // the cancelled move's quarter turn still counts
+  // enter the new move at the wind-up frame nearest the current pose (sword and shield channels)
+  let u0 = 0, best = Infinity;
+  for (let i = 0; i <= 12; i++) {
+    const t = 0.9 * ACTIVE[next.kind][0] * i / 12, c = moveChannels(next.kind, t, next.side);
+    const d = CHANNELS.reduce((sum, n) => sum + (c[n] - from[n]) ** 2, 0);
+    if (d < best) { best = d; u0 = t; }
+  }
+  const debt = yaw - (state.phi + moveChannels(next.kind, u0, next.side).turn);
+  state.act = { kind: next.kind, side: next.side, t0: now - u0 * DURATION[next.kind], u0, tb: now, from, debt };
+  queued = null;
 }
 
 // A held direction key that points the way the pawn faces keeps it hopping
@@ -496,6 +546,8 @@ function step(now) {
     }
   }
   if (state.dead) { state.act = null; queued = null; followUp = null; }
+  if (queued && queued.at === undefined) queued.at = now;
+  cancelInto(now);
   if (!state.act && !state.dead) {
     let next = followUp ?? queued ?? (heldForward() ? { kind: 'hop' } : null);
     if (followUp) followUp = null; else queued = null;
@@ -530,12 +582,45 @@ function step(now) {
 const DURATION = { hop: HOP, dash: DASH, swing: SWING, parry: PARRY };
 const toRender = sq => [(sq[0] - state.origin[0]) * SQ, (sq[1] - state.origin[1]) * SQ];
 
+// Side moves (swing, parry) as named channels, so one can blend into another. `turn` is the body's yaw on top of
+// state.phi; the sword and shield channels are relative to the body.
+const CHANNELS = ['sy', 'sweep', 'lean', 'reach', 'shSweep', 'shFace', 'shY', 'shR', 'shTilt'];
+const REST_CH = { turn: 0, sy: 1, sweep: 0, lean: 0, reach: 0, shSweep: SHIELD_REST.sweep, shFace: 0, shY: SHIELD_REST.y, shR: SHIELD_REST.r, shTilt: 0 };
+function moveChannels(kind, u, side) {
+  if (kind === 'swing') {
+    const s = swingPose(u, side);
+    // tuck the shield round to the side the swing ends on, out of the blade's arc, then bring it back in front
+    const tuck = u < 0.2 ? ease(u / 0.2) : u < 0.75 ? 1 : 1 - ease((u - 0.75) / 0.25);
+    return { turn: s.turn, sy: s.sy, sweep: s.sweep, lean: s.lean, reach: s.reach,
+      shSweep: SHIELD_REST.sweep + (side * SHIELD_TUCK.sweep - SHIELD_REST.sweep) * tuck, shFace: 0,
+      shY: SHIELD_REST.y + (SHIELD_TUCK.y - SHIELD_REST.y) * tuck, shR: SHIELD_REST.r + (SHIELD_TUCK.r - SHIELD_REST.r) * tuck, shTilt: 0,
+      slashing: s.slashing, parrying: false };
+  }
+  const b = parryPose(u, side);
+  return { turn: b.turn, sy: b.sy, sweep: b.sword.sweep, lean: b.sword.lean, reach: 0,
+    shSweep: b.shield.sweep, shFace: b.shield.face, shY: b.shield.y, shR: b.shield.r, shTilt: b.shield.tilt,
+    slashing: false, parrying: b.parrying };
+}
+const actU = (a, now) => Math.min(1, Math.max(a.u0 ?? 0, (now - a.t0) / DURATION[a.kind]));
+// The channels of the current side move at `now`, cross-faded from where a cancelled move left off. This is the
+// cross-fade K.machine does (smoothstep over BLEND seconds from a snapshot), written as a function of the game clock
+// so contact sub-steps can sample any instant. The body's turn blends over the rest of the move instead, so a
+// cancelled quarter turn unwinds smoothly. Hit and block timing (slashing, parrying) come from the clock alone.
+function sideChannels(a, now) {
+  const u = actU(a, now), c = moveChannels(a.kind, u, a.side);
+  if (a.from) {
+    const k = ease(Math.min(1, Math.max(0, (now - a.tb) / BLEND)));
+    for (const n of CHANNELS) c[n] = a.from[n] + (c[n] - a.from[n]) * k;
+    c.turn += a.debt * (1 - ease(Math.min(1, Math.max(0, (u - a.u0) / (1 - a.u0)))));
+  }
+  return c;
+}
+
 // Player pose, including where the sword is
 function pose(now) {
   let [x, z] = toRender(state.sq);
   let y = 0, phi = state.phi, A = rotY(phi);
-  let sweep = 0, lean = 0, reach = 0, slashing = false, parrying = false, u = 0, side = 0;
-  let sh = { ...SHIELD_REST, tilt: 0 };
+  let c = { ...REST_CH }, slashing = false, parrying = false, u = 0, side = 0;
   const a = state.act;
   if (a?.kind === 'hop' || a?.kind === 'dash') {
     const dash = a.kind === 'dash';
@@ -543,33 +628,40 @@ function pose(now) {
     const d = (dash ? DASH_SQUARES : 1) * SQ * h.along;
     x += a.dir[0] * d; z += a.dir[1] * d; y = h.y;
     A = K.M.mul(hopMatrix(h, a.dir), rotY(phi));
-    if (dash) { lean = -0.5 * Math.min(1, Math.max(0, -h.tilt / 0.4)); sh.r += 0.04; }   // sword and shield swept back by the rush
-  } else if (a?.kind === 'swing') {
-    u = Math.min(1, (now - a.t0) / SWING); side = a.side;
-    const s = swingPose(u, a.side);
-    phi += s.turn;
-    A = K.M.mul(scaleY(s.sy), rotY(phi));
-    ({ sweep, lean, reach, slashing } = s);
-    // tuck the shield round to the side the swing ends on, out of the blade's arc, then bring it back in front
-    const tuck = u < 0.2 ? ease(u / 0.2) : u < 0.75 ? 1 : 1 - ease((u - 0.75) / 0.25);
-    sh.sweep += (side * SHIELD_TUCK.sweep - sh.sweep) * tuck;
-    sh.y += (SHIELD_TUCK.y - sh.y) * tuck; sh.r += (SHIELD_TUCK.r - sh.r) * tuck;
-  } else if (a?.kind === 'parry') {
-    u = Math.min(1, (now - a.t0) / PARRY); side = a.side;
-    const b = parryPose(u, a.side);
-    phi += b.turn;
-    A = K.M.mul(scaleY(b.sy), rotY(phi));
-    sh = b.shield; sweep = b.sword.sweep; lean = b.sword.lean; parrying = b.parrying;
+    if (dash) { c.lean = -0.5 * Math.min(1, Math.max(0, -h.tilt / 0.4)); c.shR += 0.04; }   // sword and shield swept back by the rush
+  } else if (a?.kind === 'swing' || a?.kind === 'parry') {
+    u = actU(a, now); side = a.side;
+    c = sideChannels(a, now);
+    ({ slashing, parrying } = c);
+    phi += c.turn;
+    A = K.M.mul(scaleY(c.sy), rotY(phi));
   }
   const hurt = now - state.hurtAt;   // flinch when hit: a sharp squash that rings out
   if (hurt >= 0 && hurt < 0.45) A = K.M.mul(scaleY(1 - 0.16 * Math.exp(-7 * hurt) * Math.cos(hurt * 28)), A);
+  return build({ x, y, z, A, phi, c, slashing, parrying, u, side, now });
+}
+// Sword and shield matrices from the channels
+function build(p) {
+  const c = p.c;
   // Sword: carried round the pawn's axis by `sweep`, tilted outward by `lean`, held further out by `reach`
-  const grip = mv(rotY(sweep), [HAND[0], HAND[1], HAND[2] - reach]);
-  const swordA = K.M.mul(rotY(sweep), K.M.rot([1, 0, 0], -lean));
-  // Shield: carried round the pawn's axis, its face pointing outward along `sweep`
-  const shieldAt = mv(rotY(sh.sweep), [0, sh.y, -sh.r]);
-  const shieldA = K.M.mul(rotY(sh.sweep + (sh.face || 0)), K.M.rot([1, 0, 0], sh.tilt));   // face: extra turn of the shield on its own axis
-  return { x, y, z, A, phi, grip, swordA, shieldAt, shieldA, slashing, parrying, u, side, now };
+  p.grip = mv(rotY(c.sweep), [HAND[0], HAND[1], HAND[2] - c.reach]);
+  p.swordA = K.M.mul(rotY(c.sweep), K.M.rot([1, 0, 0], -c.lean));
+  // Shield: carried round the pawn's axis, its face pointing outward along `sweep`; face is an extra turn on its own axis
+  p.shieldAt = mv(rotY(c.shSweep), [0, c.shY, -c.shR]);
+  p.shieldA = K.M.mul(rotY(c.shSweep + c.shFace), K.M.rot([1, 0, 0], c.shTilt));
+  return p;
+}
+// Render-only follow-through: springs on the sword's tilt and the shield's face hide what seams a cancel leaves.
+// Contact always uses the unsprung pose.
+const FOLLOW = num('follow', 900);   // spring stiffness; ?follow=0 turns it off
+let springs = null;
+function followThrough(p, dt) {
+  if (!FOLLOW || !K.spring) return p;
+  const keys = ['lean', 'shFace', 'shTilt'];
+  springs ??= keys.map(k => K.spring(p.c[k], FOLLOW, 0.55));
+  const c = { ...p.c };
+  keys.forEach((k, i) => { c[k] = springs[i].step(p.c[k], dt); if (typeof c[k] !== 'number') c[k] = springs[i].x; });
+  return build({ ...p, c });
 }
 
 // World-space point t along the blade, for a pose (the player's or an enemy's)
@@ -653,7 +745,11 @@ function checkEnemyHits(prevNow, now, stage, rig) {
       const ep = enemyPose(e, tm);
       if (!ep.slashing) continue;
       const p = pose(tm), pts = BLADE_TS.map(t => [t, bladePoint(ep, t)]);
-      if ((p.parrying || PASSIVE_BLOCK) && pts.some(([, b]) => touchesShield(p, b))) { e.blocked = true; e.blockedAt = tm; flash('Parried'); break; }
+      if ((p.parrying || PASSIVE_BLOCK) && pts.some(([, b]) => touchesShield(p, b))) {
+        e.blocked = true; e.blockedAt = tm; flash('Parried');
+        if (p.parrying) e.stunUntil = tm + STUN;   // PLACEHOLDER: a block by the resting shield (?passive=1) doesn't stun
+        break;
+      }
       const hit = pts.find(([, b]) => touchesPawn(p, b));
       if (!hit) continue;
       e.struck = true;
@@ -755,7 +851,6 @@ let spaceHeld = false, spaceUsed = false;
 addEventListener('keydown', e => {
   if (e.code === 'KeyR' && !e.repeat) { restart(); return; }
   if (e.code === 'KeyZ' && !e.repeat) { if (state.zoomOut) state.zoomOut = false; else zoomOut(); return; }
-  if (e.code === 'KeyF' && !e.repeat) { setMode(!state.shieldMode); return; }
   if (e.code === 'Space') { e.preventDefault(); if (!e.repeat) { spaceHeld = true; spaceUsed = false; } return; }
   const sdir = SDIR[e.code];
   if (sdir === undefined) return;
@@ -763,7 +858,7 @@ addEventListener('keydown', e => {
   if (e.repeat) return;
   held.set(e.code, sdir);
   if (spaceHeld) spaceUsed = true;
-  pressDir(sdir, spaceHeld, state.shieldMode !== e.shiftKey);   // Shift held uses the other mode for this move
+  pressDir(sdir, spaceHeld, e.shiftKey);   // Shift + a side parries; a side alone swings
 });
 addEventListener('keyup', e => {
   held.delete(e.code);
@@ -771,20 +866,14 @@ addEventListener('keyup', e => {
 });
 addEventListener('blur', () => { held.clear(); spaceHeld = false; });
 
-// Touch: swipe the way you want to go or face; a long swipe ahead dashes. The Sword / Shield button toggles what a
-// sideways swipe does (swing or parry); swipes that start on the button count too. The zoom-out button pulls the
+// Touch: swipe the way you want to go or face; a long swipe ahead dashes. A sideways swipe that starts on the left
+// half of the screen parries that way; one that starts on the right half swings. The zoom-out button pulls the
 // camera back until the next move.
 const SWIPE_MIN = 24;                                       // px: shorter is a tap
 const swipeLong = () => Math.max(150, num('dashswipe', 0.35) * Math.min(innerWidth, innerHeight));   // px for a dash (was 90 px or a fifth)
-const modeBtn = document.getElementById('mode'), zoomBtn = document.getElementById('zoom');
-state.shieldMode = false;
-function setMode(shield) {
-  state.shieldMode = shield;
-  modeBtn.textContent = shield ? 'Shield' : 'Sword';
-  modeBtn.classList.toggle('on', shield);
-  modeBtn.setAttribute('aria-pressed', String(shield));
-}
-function swipe(dx, dy, shield = state.shieldMode) {
+const zoomBtn = document.getElementById('zoom');
+// shield: true parries (a swipe from the left half), false swings
+function swipe(dx, dy, shield = false) {
   const len = Math.hypot(dx, dy);
   if (len < SWIPE_MIN) return false;
   const sdir = Math.abs(dx) > Math.abs(dy) ? (dx < 0 ? 1 : 3) : (dy < 0 ? 0 : 2);
@@ -792,22 +881,13 @@ function swipe(dx, dy, shield = state.shieldMode) {
   return true;
 }
 window.__swipe = swipe; // for tests
-let modeTouch = null;
-modeBtn.addEventListener('pointerdown', e => { e.preventDefault(); modeBtn.setPointerCapture?.(e.pointerId); modeTouch = { x: e.clientX, y: e.clientY }; });
-modeBtn.addEventListener('pointerup', e => {
-  if (!modeTouch) return;
-  const t = modeTouch; modeTouch = null;
-  if (!swipe(e.clientX - t.x, e.clientY - t.y)) setMode(!state.shieldMode);   // a tap toggles; a swipe moves
-});
-modeBtn.addEventListener('pointercancel', () => { modeTouch = null; });
-modeBtn.addEventListener('click', e => { if (e.detail === 0) setMode(!state.shieldMode); });   // keyboard activation
 zoomBtn.addEventListener('click', () => { if (state.zoomOut) state.zoomOut = false; else zoomOut(); });
 
 const touches = new Map();   // pointerId -> { x, y, x0, y0 }
 let pinch = null;            // starting distance between two fingers
 canvas.addEventListener('pointerdown', e => {
   if (e.pointerType === 'mouse') return;
-  canvas.setPointerCapture(e.pointerId);
+  try { canvas.setPointerCapture(e.pointerId); } catch {}
   touches.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY });
   if (touches.size === 2) { const [a, b] = [...touches.values()]; pinch = Math.hypot(a.x - b.x, a.y - b.y); }
 });
@@ -826,7 +906,7 @@ const lift = e => {
   if (!t) return;
   touches.delete(e.pointerId);
   if (pinch) { if (!touches.size) pinch = null; return; }   // fingers of a pinch don't swipe
-  if (e.type === 'pointerup') swipe(t.x - t.x0, t.y - t.y0);
+  if (e.type === 'pointerup') swipe(t.x - t.x0, t.y - t.y0, t.x0 < innerWidth / 2);   // left half parries
 };
 canvas.addEventListener('pointerup', lift);
 canvas.addEventListener('pointercancel', lift);
@@ -906,13 +986,18 @@ function start() {
       const sh = 1 - 0.45 * Math.min(1, p.y / 0.8);
       rig.set('shadow', [sh, 0, 0, 0, 1, 0, 0, 0, sh], [0, 0, 0], [p.x, 0, p.z]);
       for (const e of enemies) {
-        const body = `e${e.i}`, cut = `e${e.i}cut`, shadow = `e${e.i}sh`, sword = `e${e.i}sword`, marks = `e${e.i}dz`;
+        const body = `e${e.i}`, cut = `e${e.i}cut`, shadow = `e${e.i}sh`, sword = `e${e.i}sword`, marks = `e${e.i}dz`, orbs = `e${e.i}stun`;
+        const stunned = p.now < (e.stunUntil ?? 0) && e.mode !== 'off' && e.mode !== 'dying';
         // Danger marks follow the enemy across the board, once it has landed and until it dies
-        if (DANGER_MARKS && (e.mode === 'idle' || e.mode === 'hop' || e.mode === 'swing')) {
+        if (DANGER_MARKS && !stunned && (e.mode === 'idle' || e.mode === 'hop' || e.mode === 'swing')) {
           let [mx, mz] = toRender(e.sq);
           if (e.mode === 'hop') { const k = hopPose(Math.min(1, (p.now - e.t0) / ENEMY_HOP)).along * SQ; mx += e.dir[0] * k; mz += e.dir[1] * k; }
           rig.set(marks, rotY(phiOf(e.dir)), EREST(e.i), [mx, 0, mz]);
         } else rig.set(marks, ...HIDDEN);
+        if (stunned) {
+          const [ox, oz] = toRender(e.sq), bob = 0.04 * Math.sin(p.now * 9);
+          rig.set(orbs, rotY(p.now * 5), STUN_BAKE(e.i), [ox, bob, oz]);
+        } else rig.set(orbs, ...HIDDEN);
         const swordAt = add(EREST(e.i), HAND);
         if (e.restore) {   // put a sliced enemy back together for its next life
           if (e.cut?.split) rig.assign(body, e.rows);
@@ -960,6 +1045,7 @@ function start() {
     checkHits(prev, p, stage, rig);
     checkEnemyHits(prev ? prev.now : now, now, stage, rig);
     prev = p;
+    p = followThrough(p, dt);   // what is drawn; contact used the unsprung pose
     window.__frames = (window.__frames || 0) + 1;
 
     // Keep a WINDOW × WINDOW patch of squares centred on the pawn
