@@ -72,7 +72,9 @@ const ORTHO_TAN = Math.tan(19 * DEG);   // tan of half ink-studio's default 38°
 const CAM = { yaw: num('yaw', 20) * DEG, pitch: num('pitch', 35) * DEG, zoom: num('zoom', 2.25) };
 // What a swipe straight back (away from the pawn's facing) does. PLACEHOLDER: nothing; ?behind=double makes it two
 // swings back to back, turning the pawn round.
-const BEHIND = params.get('behind') === 'double' ? 'double' : 'none';
+// Behind: a 180° spin slash, or a 180° block with the shield (default); ?behind=none does nothing, ?behind=double two swings
+const BEHIND = ['double', 'none'].includes(params.get('behind')) ? params.get('behind') : 'turn';
+const BEHIND_SIDE = { swing: -1, parry: 1 };   // PLACEHOLDER: the spin slash turns right (sword arm leading), the block left (shield arm)
 
 const canvas = document.getElementById('view');
 const status = document.getElementById('status');
@@ -280,6 +282,31 @@ function swingPose(u, side) {
   return { sweep, lean, turn, sy, reach, slashing };
 }
 
+// The 180° spin slash, u in [0, 1]: the body twists away, then spins half round toward `side` while the blade
+// sweeps a wide arc round the back (from about 35° off the front on that side to 100° past straight behind), so it
+// covers the square behind and both back diagonals. It ends facing behind.
+function spinPose(u, side) {
+  const base = swingPose(u, -side);   // borrow the swing's reach and squash
+  const reach = base.reach, sy = base.sy;
+  // lean: the arm stays fully out through the whole spin, so the blade still reaches the far back diagonal
+  let lean = u < 0.25 ? base.lean : u < 0.55 ? 0.7 + 0.85 * Math.sin(Math.PI * Math.min(1, (u - 0.25) / 0.3 * 2.5) / 2) : base.lean;
+  let turn, world, slashing = false;
+  if (u < 0.25) {                    // wind up: body coils toward the side, blade held back at the front
+    const w = ease(u / 0.25);
+    turn = side * 0.9 * w; world = side * 0.1 * w;
+  } else if (u < 0.55) {             // spin: the blade whips round the side and across the back; the body follows to 180°
+    const a = (u - 0.25) / 0.3, e = easeOut(a);
+    world = side * (0.1 + (Math.PI + ARC - 0.1) * e);
+    turn = side * (0.9 + (Math.PI - 0.9) * e);
+    slashing = Math.abs(world) > 0.6;
+  } else {                           // recover: blade back up in front of the body, which settles facing behind
+    const a = (u - 0.55) / 0.45, r = 1 - ease(a);
+    turn = side * (Math.PI + 0.06 * Math.exp(-5 * a) * Math.sin(a * 12));
+    world = turn + side * ARC * r;
+  }
+  return { sweep: world - turn, lean, turn, sy, reach, slashing };
+}
+
 // One dash with u in [0, 1]: a short crouch, a fast low skim over two squares with a hard forward lean, a braking skid.
 // `along` runs 0..1 over the whole dash distance.
 function dashPose(u) {
@@ -307,7 +334,8 @@ function dashPose(u) {
 // way (it turns further than the arc, like a door on its hinge), and holds there braced (the parry window). Then the
 // body follows a quarter turn, so the pawn ends facing that way with the shield back in front. `parrying` marks the
 // window, when the shield turns blades aside.
-const PARRY_ARC = num('arc', 1.4);    // how far round the bash carries the shield, in radians from the front (about 80°)
+const PARRY_ARC = num('arc', 1.4);
+const PARRY_180_EXTRA = num('arc180', 0.7);   // how far past a quarter the 180° block pre-turns (radians)    // how far round the bash carries the shield, in radians from the front (about 80°)
 function parryPose(u, side) {
   let world, turn, up, face, out, parrying = false;
   if (u < 0.15) {                    // cock: shield pulled back across the body, face angled away, the body coils
@@ -391,6 +419,7 @@ function moveToward({ sdir, dash, shield }) {
   if (same(d, facingDir(state.phi))) return { kind: dash ? 'dash' : 'hop' };
   if (same(d, facingDir(state.phi + Math.PI / 2))) return { kind: shield ? 'parry' : 'swing', side: 1 };
   if (same(d, facingDir(state.phi - Math.PI / 2))) return { kind: shield ? 'parry' : 'swing', side: -1 };
+  if (BEHIND === 'turn') { const kind = shield ? 'parry' : 'swing'; return { kind, side: BEHIND_SIDE[kind], q: 2 }; }
   if (BEHIND === 'double') { followUp = { kind: 'swing', side: 1 }; return { kind: 'swing', side: 1 }; }
   return null;
 }
@@ -502,22 +531,22 @@ function cancelInto(now) {
   let next = queued;
   if (next.kind === 'dir') {
     const phi0 = state.phi;
-    state.phi += u >= s1 ? a.side * Math.PI / 2 : 0;
+    state.phi += u >= s1 ? a.side * (a.q || 1) * Math.PI / 2 : 0;
     next = moveToward(next);
     state.phi = phi0; followUp = null;
   }
   if (!next || !(next.kind === 'swing' || next.kind === 'parry')) return;   // hops and dashes wait for the move to end
   const from = sideChannels(a, now), yaw = state.phi + from.turn;
-  state.phi += a.side * Math.PI / 2;                   // the cancelled move's quarter turn still counts
+  state.phi += a.side * (a.q || 1) * Math.PI / 2;      // the cancelled move's turn still counts
   // enter the new move at the wind-up frame nearest the current pose (sword and shield channels)
   let u0 = 0, best = Infinity;
   for (let i = 0; i <= 12; i++) {
-    const t = 0.9 * ACTIVE[next.kind][0] * i / 12, c = moveChannels(next.kind, t, next.side);
+    const t = 0.9 * ACTIVE[next.kind][0] * i / 12, c = moveChannels(next.kind, t, next.side, next.q);
     const d = CHANNELS.reduce((sum, n) => sum + (c[n] - from[n]) ** 2, 0);
     if (d < best) { best = d; u0 = t; }
   }
-  const debt = yaw - (state.phi + moveChannels(next.kind, u0, next.side).turn);
-  state.act = { kind: next.kind, side: next.side, t0: now - u0 * DURATION[next.kind], u0, tb: now, from, debt };
+  const debt = yaw - (state.phi + moveChannels(next.kind, u0, next.side, next.q).turn);
+  state.act = { kind: next.kind, side: next.side, q: next.q || 1, t0: now - u0 * DURATION[next.kind], u0, tb: now, from, debt };
   queued = null;
 }
 
@@ -541,7 +570,7 @@ function step(now) {
     if (u >= 1 || chain) {
       if (a.kind === 'hop') { state.sq[0] += a.dir[0]; state.sq[1] += a.dir[1]; }
       else if (a.kind === 'dash') { state.sq[0] += DASH_SQUARES * a.dir[0]; state.sq[1] += DASH_SQUARES * a.dir[1]; }
-      else if (a.kind === 'swing' || (a.kind === 'parry' && PARRY_TURNS)) state.phi += a.side * Math.PI / 2;
+      else if (a.kind === 'swing' || (a.kind === 'parry' && PARRY_TURNS)) state.phi += a.side * (a.q || 1) * Math.PI / 2;
       state.act = null;
     }
   }
@@ -563,7 +592,7 @@ function step(now) {
         state.act = { kind: next.kind, dir, t0: now };
         if (next.kind === 'dash') spendStamina(now);
       }
-    } else if (next) state.act = { kind: next.kind, side: next.side, t0: now };
+    } else if (next) state.act = { kind: next.kind, side: next.side, q: next.q || 1, t0: now };
   }
   stepEnemies(now);
   // Rebase so render coordinates stay small however far the pawn walks.
@@ -586,9 +615,9 @@ const toRender = sq => [(sq[0] - state.origin[0]) * SQ, (sq[1] - state.origin[1]
 // state.phi; the sword and shield channels are relative to the body.
 const CHANNELS = ['sy', 'sweep', 'lean', 'reach', 'shSweep', 'shFace', 'shY', 'shR', 'shTilt'];
 const REST_CH = { turn: 0, sy: 1, sweep: 0, lean: 0, reach: 0, shSweep: SHIELD_REST.sweep, shFace: 0, shY: SHIELD_REST.y, shR: SHIELD_REST.r, shTilt: 0 };
-function moveChannels(kind, u, side) {
+function moveChannels(kind, u, side, q = 1) {
   if (kind === 'swing') {
-    const s = swingPose(u, side);
+    const s = (q === 2 ? spinPose : swingPose)(u, side);
     // tuck the shield round to the side the swing ends on, out of the blade's arc, then bring it back in front
     const tuck = u < 0.2 ? ease(u / 0.2) : u < 0.75 ? 1 : 1 - ease((u - 0.75) / 0.25);
     return { turn: s.turn, sy: s.sy, sweep: s.sweep, lean: s.lean, reach: s.reach,
@@ -597,6 +626,12 @@ function moveChannels(kind, u, side) {
       slashing: s.slashing, parrying: false };
   }
   const b = parryPose(u, side);
+  if (q === 2) {   // 180° block: the body pre-turns past a quarter during the cock, so the bash and hold sit round the
+    // back (covering the square behind and both back diagonals); the extra comes back off in the final turn
+    const pre = side * (Math.PI / 2 + PARRY_180_EXTRA) * ease(Math.min(1, u / 0.15))
+      - side * PARRY_180_EXTRA * (u < 0.6 ? 0 : ease((u - 0.6) / 0.4));
+    b.turn += pre;
+  }
   return { turn: b.turn, sy: b.sy, sweep: b.sword.sweep, lean: b.sword.lean, reach: 0,
     shSweep: b.shield.sweep, shFace: b.shield.face, shY: b.shield.y, shR: b.shield.r, shTilt: b.shield.tilt,
     slashing: false, parrying: b.parrying };
@@ -607,7 +642,7 @@ const actU = (a, now) => Math.min(1, Math.max(a.u0 ?? 0, (now - a.t0) / DURATION
 // so contact sub-steps can sample any instant. The body's turn blends over the rest of the move instead, so a
 // cancelled quarter turn unwinds smoothly. Hit and block timing (slashing, parrying) come from the clock alone.
 function sideChannels(a, now) {
-  const u = actU(a, now), c = moveChannels(a.kind, u, a.side);
+  const u = actU(a, now), c = moveChannels(a.kind, u, a.side, a.q);
   if (a.from) {
     const k = ease(Math.min(1, Math.max(0, (now - a.tb) / BLEND)));
     for (const n of CHANNELS) c[n] = a.from[n] + (c[n] - a.from[n]) * k;
